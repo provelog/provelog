@@ -1,0 +1,62 @@
+{
+ "aggregate_clean": {
+  "defining_code": null,
+  "description": "an aggregate anchor receipt: this stream's claim is one leaf of a 3-leaf epoch tree whose shared root carries one real Sectigo RFC 3161 stamp (frozen 2026-09-24). The Python verifier validates the TSA chain (root bundled) and counts the stamp as coverage; the browser verifier validates the same CMS signature and certificate chain against the pinned Sectigo root and agrees on the pass verdict. TSA load per epoch is one stamp regardless of stream count.",
+  "expect_ok": true,
+  "file": "aggregate_clean.json"
+ },
+ "aggregate_tampered": {
+  "defining_code": "agg_root_mismatch",
+  "description": "the same aggregate receipt with the agg_root field swapped: the inclusion proof no longer folds to the claimed root. Both implementations must refuse (agg_root_mismatch).",
+  "expect_ok": false,
+  "file": "aggregate_tampered.json"
+ },
+ "bad_signature": {
+  "defining_code": "client_bad_signature",
+  "description": "a record signature corrupted; the device-key signature fails",
+  "expect_ok": false,
+  "file": "bad_signature.json"
+ },
+ "clean": {
+  "defining_code": null,
+  "description": "an untampered, anchored run; verifies clean",
+  "expect_ok": true,
+  "file": "clean.json"
+ },
+ "delete_record": {
+  "defining_code": "server_chain_break",
+  "description": "a record removed mid-stream; the server receipt chain breaks",
+  "expect_ok": false,
+  "file": "delete_record.json"
+ },
+ "multi_session": {
+  "defining_code": null,
+  "description": "three sealed sessions on one reused stream, one device key; verifies clean",
+  "expect_ok": true,
+  "file": "multi_session.json"
+ },
+ "nfc_key_collision": {
+  "defining_code": "not_canonicalizable",
+  "description": "two payload keys that NFC-normalize to the same key; the canonicalizer must refuse instead of silently merging them (a merge would drop a field and alias two different objects)",
+  "expect_ok": false,
+  "file": "nfc_key_collision.json"
+ },
+ "reorder": {
+  "defining_code": "arrival_reorder",
+  "description": "two records swapped; arrival order no longer matches emission order",
+  "expect_ok": false,
+  "file": "reorder.json"
+ },
+ "strip_anchor": {
+  "defining_code": "no_anchor",
+  "description": "valid records with no external anchor; weaker, not tampered",
+  "expect_ok": true,
+  "file": "strip_anchor.json"
+ },
+ "tamper_payload": {
+  "defining_code": "client_hash_mismatch",
+  "description": "a record payload edited after signing; the record hash no longer matches",
+  "expect_ok": false,
+  "file": "tamper_payload.json"
+ }
+}

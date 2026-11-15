@@ -1,0 +1,7 @@
+include NOTICE.md
+
+
+
+graft web
+
+recursive-include src/provelog/web *.html

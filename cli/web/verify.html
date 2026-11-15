@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Verify a record | ProveLog</title>
+<meta name="description" content="Independently verify a ProveLog bundle. Every hash, signature, chain link, Merkle root, and timestamp is recomputed. Trust neither the agent nor the sink.">
+<style>
+:root{--bg:#0a0b0e;--bg-2:#0f1115;--bg-3:#14171c;--border:#20242c;--border-hi:#2e333d;
+--accent:#2ee6a6;--accent-dim:#16c489;--accent-ink:#04130d;--accent-glow:rgba(46,230,166,.16);
+--text-hi:#f3f5f7;--text-mid:#99a2af;--text-lo:#5a626e;--text-mono:#c9d0d9;
+--green:#2ee6a6;--green-glow:rgba(46,230,166,.14);--red:#f06a5d;--red-glow:rgba(240,106,93,.14);
+--amber:#f0b23a;--amber-glow:rgba(240,178,58,.14);--blue:#2ee6a6;
+--font-mono:'DM Mono','Fira Code',ui-monospace,monospace;--font-body:'DM Sans',system-ui,-apple-system,sans-serif;
+--r-sm:4px;--r-md:8px;--r-lg:12px;--r-xl:18px;--gutter:clamp(1rem,5vw,2.5rem)}
+@media(prefers-color-scheme:light){:root{--bg:#fbfcfd;--bg-2:#f5f7f9;--bg-3:#ffffff;--border:#e4e8ee;--border-hi:#d2d8e0;--accent:#07a06a;--accent-dim:#058a5b;--accent-ink:#ffffff;--green:#07a06a;--green-glow:rgba(7,160,106,.14);--text-hi:#0c0f14;--text-mid:#515b67;--text-lo:#97a0ab;--text-mono:#1b2430}}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-body);line-height:1.55;color:var(--text-hi);background:var(--bg);min-height:100vh;overflow-x:hidden}
+body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.5;
+background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E")}
+.wrap{position:relative;z-index:1;max-width:760px;margin:0 auto;padding:clamp(2rem,7vw,4.5rem) var(--gutter) 5rem}
+.eyebrow{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:.5rem;margin-bottom:1rem}
+.eyebrow::before{content:'';width:18px;height:1px;background:var(--accent)}
+h1{font-family:var(--font-mono);font-size:clamp(1.7rem,4vw,2.4rem);font-weight:500;letter-spacing:-.02em;line-height:1.12;margin-bottom:.85rem}
+.lede{color:var(--text-mid);font-size:1rem;max-width:58ch;margin-bottom:2.25rem}
+a{color:var(--accent)}
+.drop{border:1.5px dashed var(--border-hi);border-radius:var(--r-xl);background:var(--bg-2);padding:clamp(2rem,6vw,3.25rem);text-align:center;transition:border-color .18s,background .18s;cursor:pointer}
+.drop.over{border-color:var(--accent);background:var(--accent-glow)}
+.drop .ic{width:44px;height:44px;margin:0 auto 1rem;color:var(--accent)}
+.drop .t{font-family:var(--font-mono);font-size:.95rem;color:var(--text-hi);margin-bottom:.4rem}
+.drop .d{font-size:.85rem;color:var(--text-lo)}
+.drop .or{margin:1.1rem 0 .3rem;font-family:var(--font-mono);font-size:.72rem;color:var(--text-lo)}
+.btn{display:inline-flex;align-items:center;gap:.5rem;font-size:.88rem;font-weight:600;background:var(--accent);color:var(--accent-ink);border:none;border-radius:var(--r-md);padding:.7rem 1.3rem;min-height:46px;cursor:pointer;transition:background .15s,transform .12s}
+.btn:hover{background:var(--accent-dim);transform:translateY(-1px)}
+.btn.ghost{background:transparent;color:var(--text-hi);border:1px solid var(--border-hi);font-weight:500}
+.btn.ghost:hover{border-color:var(--accent)}
+.paste{margin-top:1.25rem}
+.paste summary{font-family:var(--font-mono);font-size:.8rem;color:var(--text-mid);cursor:pointer;list-style:none;display:flex;align-items:center;gap:.4rem}
+.paste summary::-webkit-details-marker{display:none}
+.paste summary::before{content:'+';color:var(--accent);font-weight:600}
+.paste[open] summary::before{content:'-'}
+textarea{width:100%;margin-top:.75rem;min-height:140px;font-family:var(--font-mono);font-size:.78rem;color:var(--text-mono);background:var(--bg);border:1px solid var(--border);border-radius:var(--r-md);padding:.8rem;resize:vertical}
+textarea:focus{outline:none;border-color:var(--accent)}
+.result{margin-top:2rem}
+.verdict{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;border:1px solid var(--border);border-left-width:3px;border-radius:var(--r-md);padding:1.15rem 1.3rem;background:var(--bg-2)}
+.verdict.verified{border-left-color:var(--green)}.verdict.amber{border-left-color:var(--amber)}
+.verdict.tampered{border-left-color:var(--red)}.verdict.error{border-left-color:var(--text-lo)}
+.vbadge{display:inline-flex;align-items:center;gap:.5rem;font-family:var(--font-mono);font-size:.82rem;font-weight:500;padding:.4rem .75rem;border-radius:999px;border:1px solid;white-space:nowrap}
+.vbadge .bd{width:8px;height:8px;border-radius:50%}
+.verified .vbadge{color:var(--green);border-color:color-mix(in srgb,var(--green) 45%,transparent);background:var(--green-glow)}.verified .vbadge .bd{background:var(--green)}
+.amber .vbadge{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,transparent);background:var(--amber-glow)}.amber .vbadge .bd{background:var(--amber)}
+.tampered .vbadge{color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,transparent);background:var(--red-glow)}.tampered .vbadge .bd{background:var(--red)}
+.error .vbadge{color:var(--text-lo);border-color:var(--border)}.error .vbadge .bd{background:var(--text-lo)}
+.vmeta{flex:1;min-width:12rem}
+.vmeta .h{font-family:var(--font-mono);font-size:1.02rem;color:var(--text-hi)}
+.vmeta .s{font-size:.84rem;color:var(--text-mid);margin-top:.2rem}
+.findings{margin-top:1.25rem;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden}
+.findings>summary{cursor:pointer;list-style:none}
+.findings>summary::-webkit-details-marker{display:none}
+.fhead{padding:.8rem 1.1rem;background:var(--bg-3);border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.74rem;letter-spacing:.06em;text-transform:uppercase;color:var(--text-mid);display:flex;gap:1rem}
+.fhead .ct{color:var(--text-lo)}
+.f{display:flex;gap:.85rem;align-items:flex-start;padding:.7rem 1.1rem;border-bottom:1px solid var(--border)}
+.f:last-child{border-bottom:0}
+.f .sev{font-family:var(--font-mono);font-size:.64rem;font-weight:500;letter-spacing:.06em;text-transform:uppercase;padding:.18rem .45rem;border-radius:var(--r-sm);flex-shrink:0;margin-top:.1rem}
+.f.fail .sev{color:var(--red);background:var(--red-glow)}.f.warn .sev{color:var(--amber);background:var(--amber-glow)}.f.info .sev{color:var(--blue);background:rgba(46,230,166,.12)}
+.f .fc{min-width:0}
+.f .code{font-family:var(--font-mono);font-size:.78rem;color:var(--text-hi)}
+.f .detail{font-size:.82rem;color:var(--text-mid);margin-top:.15rem;word-break:break-word}
+.again{margin-top:1.5rem;display:flex;gap:.6rem;flex-wrap:wrap}
+.foot{margin-top:2.5rem;font-size:.82rem;color:var(--text-lo);line-height:1.6;border-top:1px solid var(--border);padding-top:1.25rem}
+.foot code{font-family:var(--font-mono);background:var(--bg-3);padding:.1em .4em;border-radius:var(--r-sm);color:var(--text-mono)}
+.spin{width:18px;height:18px;border:2px solid var(--border-hi);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+.checks{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1.1rem}
+.check{display:inline-flex;align-items:center;gap:.45rem;font-family:var(--font-mono);font-size:.72rem;padding:.34rem .65rem;border-radius:999px;border:1px solid var(--border);color:var(--text-lo);background:var(--bg-2);white-space:nowrap}
+.check .ck{width:13px;height:13px;flex-shrink:0}
+.check.on{color:var(--green);border-color:color-mix(in srgb,var(--green) 35%,transparent)}
+.check.off{color:var(--text-lo);opacity:.7}
+.check.amber{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,transparent)}
+.axes{margin-top:1.1rem;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:var(--bg-2)}
+.axis-lines{margin:0;padding:1rem 1.1rem;font-family:var(--font-mono);font-size:.78rem;line-height:1.85;color:var(--text-hi);white-space:pre-wrap;overflow-wrap:anywhere}
+.axis{display:flex;align-items:baseline;gap:.8rem;padding:.62rem 1.05rem;border-bottom:1px solid var(--border)}
+.axis:last-child{border-bottom:0}
+.axis .al{width:5.6rem;flex:none;font-family:var(--font-mono);font-size:.74rem;letter-spacing:.04em;text-transform:uppercase;color:var(--text-mid)}
+.axis .av{width:6.2rem;flex:none;font-family:var(--font-mono);font-size:.78rem;font-weight:600;letter-spacing:.04em}
+.axis .av.pass{color:var(--green)}.axis .av.fail{color:var(--red)}
+.axis .av.absent,.axis .av.untrusted,.axis .av.partial,.axis .av.none,.axis .av.unknown{color:var(--amber)}
+.axis .ad{font-size:.82rem;color:var(--text-mid);min-width:0}
+.concl{padding:.72rem 1.05rem;border-top:1px solid var(--border);font-size:.84rem;color:var(--text-hi);background:var(--bg-3)}
+@media(max-width:520px){.axis{display:grid;grid-template-columns:5.2rem 1fr;gap:.15rem .6rem}.axis .ad{grid-column:1/-1}}
+.fade{animation:fadein .35s ease}
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media(max-width:520px){
+  .verdict{flex-direction:column;align-items:flex-start;gap:.7rem}
+  .vmeta{min-width:0}
+  .vbadge{max-width:100%}
+  .fhead{flex-wrap:wrap;gap:.3rem 1rem}
+}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="eyebrow">Independent verification</div>
+  <h1>Verify a record</h1>
+  <p class="lede">Drop a ProveLog bundle and the standalone verifier recomputes every hash, signature, chain link, Merkle root, and RFC 3161 timestamp signature from scratch, entirely in your browser. It trusts neither the agent that produced the record nor the sink that stored it. Sectigo and FreeTSA timestamp tokens are verified offline against pinned roots. This page is a convenience; the same check runs offline in <code style="font-family:var(--font-mono)">provelog verify</code>.</p>
+
+  <div id="drop" class="drop" tabindex="0" role="button" aria-label="Upload a bundle JSON or evidence pack ZIP">
+    
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    <div class="t">Drop bundle.json or evidence.zip here</div>
+    <div class="d">or choose a file to verify - verification runs entirely in your browser, nothing is uploaded</div>
+    <button class="btn" id="pick" type="button">Choose file</button>
+    <input id="file" type="file" accept="application/json,.json,application/zip,.zip" multiple class="hidden">
+  </div>
+
+  <details class="paste">
+    <summary>Paste bundle JSON instead</summary>
+    <textarea id="ta" placeholder='{"format":"provelog.bundle/1", ...}' spellcheck="false"></textarea>
+    <div style="margin-top:.6rem"><button class="btn ghost" id="verifyPaste" type="button">Verify pasted JSON</button></div>
+  </details>
+
+  <div id="result" class="result hidden"></div>
+
+  <div class="foot">
+    Prefer your own machine? <code>pip install provelog</code> then <code>provelog verify bundle.json</code>. The verifier is open source and the evidence format is specified in <code>docs/SPEC.md</code>, so anyone can build an independent implementation. The pinned Sectigo/FreeTSA roots validate the timestamp signature and certificate chain offline; online revocation (OCSP/CRL) is not checked. Completeness, that nothing was withheld before being recorded, is never claimed by this tool.
+  </div>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+let bundle=null;
+let packFiles=null;
+let currentFileName='bundle.json', factText=null;
+const drop=$('#drop'), result=$('#result');
+const CHECK='<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const DOT='<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+
+function show(html){ result.className='result fade'; result.classList.remove('hidden'); result.innerHTML=html; result.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function classify(rep){
+  if(rep.result==='upgrade_required') return {st:'amber',head:'Verifier upgrade required',sub:'This bundle declares a newer verifier requirement. This build cannot judge it; it is not being called valid or tampered.',badge:'Upgrade required'};
+  if(!rep.ok) return {st:'tampered',head:'Tampering detected',sub:rep.fail+' integrity failure(s). This record set has been altered, reordered, or truncated.',badge:'Tampering detected'};
+  const codes=new Set((rep.findings||[]).map(f=>f.code));
+  if(codes.has('anchor_rfc3161_invalid')) return {st:'tampered',head:'Timestamp verification failed',sub:'An RFC 3161 timestamp token is present but its CMS signature, certificate chain, or signed imprint did not verify. Do not trust this timestamp.',badge:'Timestamp invalid'};
+  
+  if(codes.has('anchor_unverified_tsa')) return {st:'tampered',head:'Evidence pack invalid',sub:"The timestamp authority is not in ProveLog's recognized TSA list (Sectigo, FreeTSA); the timestamp was not validated.",badge:'Invalid'};
+  if(codes.has('local_anchor_only')||codes.has('no_anchor')) return {st:'tampered',head:'Evidence pack invalid',sub:'No recognizable timestamp was detected. Wait until the evidence pack has been timestamped, then export it again and verify again.',badge:'Invalid'};
+  if(codes.has('no_device_signature')) return {st:'verified',head:'Integrity verified',sub:'Every record is chained and bound to a trusted external timestamp. No device signature is present, so who produced these records is not established.',badge:'Integrity verified'};
+  return {st:'verified',head:'Integrity verified',sub:'Every record is signed, chained, and bound to a trusted external timestamp. Nothing was altered, reordered, deleted, or back-dated.',badge:'Integrity verified'};
+}
+
+function pill(on, label){ const st = on===true?'on':(on==='amber'?'amber':'off'); return `<span class="check ${st}">${st==='on'?CHECK:DOT}${esc(label)}</span>`; }
+
+function checksRow(rep, codes){
+  const ok=rep.ok;
+  const tsPresent = !codes.has('no_anchor');
+  const tsTrusted = ok && !codes.has('local_anchor_only') && !codes.has('no_anchor') && !codes.has('anchor_unverified_tsa');
+  const signed = ok && !codes.has('no_device_signature');
+  const pills=[ pill(ok,'Hash chain'), pill(signed,'Signatures'),
+    pill(tsTrusted, tsPresent?'Trusted timestamp':'No timestamp') ];
+  return `<div class="checks">${pills.join('')}</div>`;
+}
+
+function axisDetail(rep, name){
+  const a=rep.axes||{};
+  const n=(bundle&&bundle.records||[]).length;
+  const covered=(bundle&&bundle.anchors||[]).reduce((m,x)=>Math.max(m,Number(x.covers_up_to)||0),0);
+  if(name==='integrity') return a.integrity==='pass'?(a.attribution==='pass'?`${n} records, hash chain and signatures verified`:`${n} records, hash chain verified`):(a.integrity==='fail'?'integrity failure; do not rely on this file':'not enough data to judge integrity');
+  if(name==='time') return {pass:'RFC 3161 timestamp verified',absent:'no timestamp in this bundle',untrusted:'timestamp present, TSA not in the recognized list (Sectigo, FreeTSA)',fail:'timestamp invalid'}[a.time]||'no timestamp in this bundle';
+  if(name==='attribution') return {pass:'device signature verified',absent:'no device signature',fail:'device signature invalid'}[a.attribution]||'no device signature';
+  return {complete:`${covered} / ${n} records covered by a timestamp`,partial:`${covered} / ${n} records covered by a timestamp`,none:`0 / ${n} records covered by a timestamp`}[a.coverage]||`0 / ${n} records covered by a timestamp`;
+}
+function axesRow(rep){
+  if(rep.axes_text) return `<div class="axes"><pre class="axis-lines">${esc(rep.axes_text)}</pre></div>`;
+  const a=rep.axes||{};
+  const rows=[['Integrity','integrity'],['Time','time'],['Attribution','attribution'],['Coverage','coverage']].map(([label,key])=>{
+    const v=String(a[key]||'unknown').toUpperCase();
+    return `<div class="axis"><span class="al">${label}</span><span class="av ${esc(String(a[key]||'unknown'))}">${v}</span><span class="ad">${esc(axisDetail(rep,key))}</span></div>`;
+  }).join('');
+  let conclusion;
+  if(a.integrity==='fail') conclusion='Do not rely on this record.';
+  else if(a.integrity!=='pass') conclusion='No integrity verdict was reached.';
+  else if(a.time==='untrusted') conclusion='Evidence pack invalid: the timestamp authority is not in the recognized list (Sectigo, FreeTSA)';
+  else if(a.time!=='pass') conclusion='Evidence pack invalid: no recognizable timestamp was detected.';
+  else if(a.time==='pass'&&a.coverage==='complete') conclusion=a.attribution==='pass'?'Record intact; its time is independently proven.':'Record intact; its time is independently proven, but attribution is not established.';
+  else conclusion='Record intact; its time is not fully proven.';
+  return `<div class="axes">${rows}<div class="concl">Conclusion: ${esc(conclusion)}</div></div>`;
+}
+
+function renderReport(rep, mode){
+  const c=classify(rep);
+  const codes=new Set((rep.findings||[]).map(f=>f.code));
+  const sev={fail:0,warn:1,info:2};
+  const fs=(rep.findings||[]).slice().sort((a,b)=>sev[a.severity]-sev[b.severity]);
+  const rows=fs.map(f=>`<div class="f ${esc(f.severity)}"><span class="sev">${esc(f.severity)}</span><div class="fc"><div class="code">${esc(f.code)}</div><div class="detail">${esc(f.detail)}</div></div></div>`).join('');
+  const where = mode==='browser' ? 'Verified in your browser, trusting no server.' : 'Verified on the server.';
+  const sub = factText || c.sub;
+  show(`
+    <div class="verdict ${c.st}">
+      <span class="vbadge"><span class="bd"></span>${esc(c.badge)}</span>
+      <div class="vmeta"><div class="h">${esc(c.head)}</div><div class="s">${esc(sub)} <span style="color:var(--text-lo)">${esc(where)}</span></div></div>
+    </div>
+    ${axesRow(rep)}
+    ${c.st==='verified'?`<div class="s" style="margin:.6rem 0;color:var(--text-lo)">What this does not prove: that nothing was withheld before recording, that the recorded event times are the true wall-clock time, or who was at the keyboard.${codes.has('no_device_signature')?' No device signature is present, so it also does not prove who produced these records.':''}</div>`:''}
+    <details class="findings" open>
+      <summary class="fhead"><span>Findings</span><span class="ct">${rep.fail||0} fail &middot; ${rep.warn||0} warn &middot; ${fs.length} total</span></summary>
+      ${rows||'<div class="f info"><span class="sev">info</span><div class="fc"><div class="code">no findings</div></div></div>'}
+    </details>
+    <div class="again"><button class="btn ghost" onclick="location.reload()">Verify another</button></div>`);
+}
+
+async function verify(){
+  if(!bundle){ return; }
+  show('<div class="verdict error"><span class="spin"></span><div class="vmeta"><div class="h">Verifying...</div><div class="s">Recomputing hashes, signatures, chains, and timestamps.</div></div></div>');
+  
+  try{
+    const mod=await import('./verify.js');
+    const rep=await mod.verifyBundle(bundle, packFiles);
+    
+    
+    
+    if(rep.ok){
+      const tsaVerified = !(rep.findings||[]).some(f=>f.code==='anchor_unverified_tsa');
+      try{ factText = mod.factSentence(bundle, currentFileName, tsaVerified); }catch(_){ factText=null; }
+    }
+    renderReport(rep,'browser');
+    return;
+  }catch(_){ 
+
+ }
+  show(`<div class="verdict error"><span class="vbadge"><span class="bd"></span>Browser verification did not finish / 浏览器验证未完成</span><div class="vmeta"><div class="h">Browser verification did not finish / 浏览器验证未完成</div><div class="s">Verification runs entirely in your browser; the server never receives the uploaded file. Verify offline with the command line: / 本页验证完全在您的浏览器中进行,服务器不接收上传的文件。请使用命令行工具离线验证:</div><div class="s" style="font-family:var(--font-mono);margin-top:.4rem">provelog verify ${esc(currentFileName)}</div></div></div><div class="again"><button class="btn ghost" onclick="location.reload()">Retry / 重试</button></div>`);
+}
+
+function ingestBundle(j, name, anchor){
+  currentFileName = name || 'bundle.json';
+  factText = null;
+  if(anchor){
+    const receipt = anchor.receipt || anchor;
+    const covers = anchor.covers_up_to ?? (j.records || []).length;
+    if(!(j.anchors && j.anchors.length)){
+      j = Object.assign({}, j, {anchors:[{anchor_seq:0, covers_up_to:covers, receipt}]});
+    }
+  }
+  if(j && j.format==='provelog.bundle/1'){ bundle=j; }
+  else if(j && j.records){ bundle=j; }
+  if(bundle) verify();
+  else show('<div class="verdict error"><span class="vbadge"><span class="bd"></span>Not a bundle</span><div class="vmeta"><div class="h">That JSON is not a ProveLog bundle</div></div></div>');
+}
+
+function ingest(text, name){
+  currentFileName = name || 'bundle.json';
+  factText = null;
+  packFiles = null;
+  let j; try{ j=JSON.parse(text); }catch(_){ show('<div class="verdict error"><span class="vbadge"><span class="bd"></span>Invalid JSON</span><div class="vmeta"><div class="h">That file is not valid JSON</div></div></div>'); return; }
+  ingestBundle(j, name, null);
+}
+
+async function readCollection(entries, name, mod){
+  const byName=new Map(entries.map(e=>[e.name,e.data]));
+  const meta=JSON.parse(new TextDecoder().decode(byName.get('collection.json')));
+  const rows=[];
+  for(const m of (meta.members||[])){
+    const data=byName.get(m.path);
+    if(!data) throw new Error('missing '+m.path);
+    const base=m.path.slice(0,m.path.lastIndexOf('/')+1);
+    const files=new Map();
+    for(const e of entries){ if(e.name.startsWith(base)&&e.name!==m.path) files.set(e.name.slice(base.length), e.data); }
+    const rep=await mod.verifyBundle(JSON.parse(new TextDecoder().decode(data)), files);
+    rows.push({m,rep});
+  }
+  renderCollection(rows);
+}
+
+function renderCollection(rows){
+  const cs=rows.map(r=>classify(r.rep));
+  const all=rows.length>0 && cs.every(c=>c.st==='verified');
+  const tampered=cs.some(c=>c.st==='tampered');
+  const st=all?'verified':(tampered?'tampered':'amber');
+  const bad=cs.filter(c=>c.st!=='verified').length;
+  const items=rows.map((r,i)=>{
+    const c=cs[i], m=r.m;
+    const title=String(m.title||m.session_id||'session');
+    return `<div class="f ${c.st==='verified'?'info':'fail'}"><span class="sev">${esc(c.badge)}</span><div class="fc"><div class="code">${esc(title)}</div><div class="detail">${esc(String(m.records??'?')+' records · '+String(m.agent||'')+' · '+c.head)}</div></div></div>`;
+  }).join('');
+  show(`
+    <div class="verdict ${st}">
+      <span class="vbadge"><span class="bd"></span>${all?'Collection verified':'Collection not verified'}</span>
+      <div class="vmeta"><div class="h">${rows.length} sessions in this collection</div><div class="s">${all?'Every session verified on its own.':bad+' of '+rows.length+' session(s) did not verify.'}</div></div>
+    </div>
+    <div class="s" style="margin:.6rem 0;color:var(--text-lo)">This container is a convenience wrapper. The set itself is not proven complete: a removed session would not be detected by the remaining ones.</div>
+    <details class="findings" open><summary class="fhead"><span>Sessions</span><span class="ct">${rows.length} total</span></summary>${items}</details>
+    <div class="again"><button class="btn ghost" onclick="location.reload()">Verify another</button></div>`);
+}
+
+async function readPack(file){
+  try{
+    const mod = await import('./verify.js');
+    const entries = await mod.unzipEntries(await file.arrayBuffer());
+    const byName = new Map(entries.map(e => [e.name, e.data]));
+    if(byName.has('collection.json')){ await readCollection(entries, file.name, mod); return; }
+    const b = byName.get('bundle.json') || entries.find(e => /(^|\/)bundle\.json$/.test(e.name))?.data;
+    if(!b) throw new Error('zip has no bundle.json');
+    const bundle = JSON.parse(new TextDecoder().decode(b));
+    const a = byName.get('anchor.json') || entries.find(e => /(^|\/)anchor\.json$/.test(e.name))?.data;
+    const anchor = a ? JSON.parse(new TextDecoder().decode(a)) : null;
+    packFiles = byName;
+    ingestBundle(bundle, file.name, anchor);
+  }catch(e){
+    show(`<div class="verdict error"><span class="vbadge"><span class="bd"></span>Could not read pack</span><div class="vmeta"><div class="h">That ZIP could not be verified</div><div class="s">${esc(String(e && e.message || e))}</div><div class="s">Unzip it and use <code>provelog verify bundle.json</code>.</div></div></div>`);
+  }
+}
+
+function readFiles(files){
+  [...files].forEach(f=>{
+    if(/\.zip$/i.test(f.name)){ readPack(f); return; }
+    const rd=new FileReader(); rd.onload=()=>ingest(rd.result,f.name); rd.readAsText(f);
+  });
+}
+$('#pick').onclick=e=>{ e.stopPropagation(); $('#file').click(); };
+$('#file').onchange=e=>readFiles(e.target.files);
+drop.onclick=()=>$('#file').click();
+drop.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); $('#file').click(); } };
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
+drop.addEventListener('drop',e=>readFiles(e.dataTransfer.files));
+$('#verifyPaste').onclick=()=>{ const t=$('#ta').value.trim(); if(t) ingest(t,'pasted'); };
+</script>
+</body>
+</html>

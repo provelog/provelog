@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>provelog — conformance vectors</title>
+<style>
+  body { font: 15px/1.6 ui-monospace, monospace; margin: 2rem auto; max-width: 52rem; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.3rem; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+  td, th { border: 1px solid #ccc; padding: .35rem .6rem; text-align: left; vertical-align: top; }
+  td.name { font-weight: 600; white-space: nowrap; }
+  td.v { white-space: nowrap; }
+  p.note { color: #555; }
+</style>
+</head>
+<body>
+<h1>provelog verifier conformance vectors</h1>
+<p>These are the frozen bundles every provelog verifier (Python <code>provelog verify</code> and the
+browser verifier) must reach the recorded verdict on. They live in
+<code>vectors/v1/</code> with a documented manifest, so anyone can validate their own
+verifier against the same golden cases. The legacy-tagged vectors carry the pre-rename
+<code>flightrecorder.bundle/1</code> format tag and domain labels on purpose: records stay
+verifiable forever.</p>
+<p><b>10</b> frozen vectors.</p>
+<table>
+  <thead><tr><th>vector</th><th>what it holds</th><th>required verdict</th></tr></thead>
+  <tbody>
+      <tr><td class="name">clean</td><td>an untampered, anchored run; verifies clean</td><td class="v">verifies clean</td></tr>
+      <tr><td class="name">tamper_payload</td><td>a record payload edited after signing; the record hash no longer matches</td><td class="v">rejected: client_hash_mismatch</td></tr>
+      <tr><td class="name">delete_record</td><td>a record removed mid-stream; the server receipt chain breaks</td><td class="v">rejected: server_chain_break</td></tr>
+      <tr><td class="name">reorder</td><td>two records swapped; arrival order no longer matches emission order</td><td class="v">rejected: arrival_reorder</td></tr>
+      <tr><td class="name">aggregate_clean</td><td>an aggregate anchor: this stream is one leaf of a 3-leaf epoch tree, one real Sectigo stamp on the shared root; TSA load per epoch is one stamp regardless of stream count</td><td class="v">verifies clean</td></tr>
+      <tr><td class="name">aggregate_tampered</td><td>the same aggregate receipt with the agg_root swapped; the inclusion proof no longer folds</td><td class="v">rejected: agg_root_mismatch</td></tr>
+      <tr><td class="name">nfc_key_collision</td><td>two object keys that NFC-normalize to the same key; refused, never silently merged</td><td class="v">rejected: not_canonicalizable</td></tr>
+      <tr><td class="name">bad_signature</td><td>a record signature corrupted; the device-key signature fails</td><td class="v">rejected: client_bad_signature</td></tr>
+      <tr><td class="name">strip_anchor</td><td>valid records with no external anchor; weaker, not tampered</td><td class="v">verifies clean</td></tr>
+      <tr><td class="name">multi_session</td><td>three sealed sessions on one reused stream, one device key; verifies clean</td><td class="v">verifies clean</td></tr>
+  </tbody>
+</table>
+<p class="note">This page is pinned to the manifest by the project's test suite, so it cannot drift.</p>
+</body>
+</html>
