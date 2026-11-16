@@ -281,6 +281,10 @@ def _start_idle_watcher(server, timeout_s: float, app) -> None:
     async def _touch(request, call_next):
         state["active"] += 1
         state["last"] = time.monotonic()
+                                                                            
+                                                               
+        if not request.url.path.endswith("/__provelog/bye"):
+            inner.state.viewer_bye_at = None
         try:
             return await call_next(request)
         finally:
@@ -288,10 +292,18 @@ def _start_idle_watcher(server, timeout_s: float, app) -> None:
             state["last"] = time.monotonic()
 
     def loop():
-        interval = min(30.0, max(5.0, timeout / 2))
+        interval = min(2.0, max(1.0, timeout / 10))
         while not server.should_exit:
             time.sleep(interval)
             if server.should_exit:
+                return
+            bye_at = getattr(inner.state, "viewer_bye_at", None)
+            if (bye_at is not None and state["active"] == 0
+                    and time.monotonic() - bye_at >= 8.0):
+                print("  viewer closed; exiting\n")
+                import sys
+                sys.stdout.flush()
+                server.should_exit = True
                 return
             if state["active"] == 0 and time.monotonic() - state["last"] >= timeout:
                 print("  viewer idle; exiting\n")
@@ -371,7 +383,14 @@ def _cmd_chat(args) -> int:
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
     _start_stop_watcher(server, port)
-    _start_idle_watcher(server, float(getattr(args, "idle_timeout", 0) or 0), app)
+    idle = float(getattr(args, "idle_timeout", 0) or 0)
+                                                                             
+                                                                        
+                                                                        
+                                                                          
+    if idle <= 0 and not args.no_browser:
+        idle = 120.0
+    _start_idle_watcher(server, idle, app)
     try:
         server.run()
         if not server.started:
@@ -399,5 +418,6 @@ def register_cli(sub: argparse._SubParsersAction) -> None:
     c.add_argument("--no-reuse", action="store_true",
                    help="start a second viewer even if one is already running")
     c.add_argument("--idle-timeout", type=float, default=0.0,
-                   help=argparse.SUPPRESS)
+                   help="exit after N seconds with no viewer requests "
+                        "(default 120 when a browser is opened; 0 disables)")
     c.set_defaults(func=_cmd_chat)

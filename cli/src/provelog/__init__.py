@@ -6,6 +6,6 @@ importers.
 """
 
                                                                          
-__version__ = "1.2.4"
+__version__ = "1.2.5"
 
 GENESIS_PREV_HASH = "0" * 64

@@ -248,6 +248,18 @@ def create_app(home: Path | None = None,
                                                                 
         return HTMLResponse(PAGE_HTML)
 
+    @app.post("/__provelog/bye")
+    def viewer_bye():
+        """Best-effort signal that the last tab is closing.
+
+        `navigator.sendBeacon` is not guaranteed (the tab may crash or the
+        process may be killed), so the idle watcher remains the fallback.
+        """
+        import time
+
+        app.state.viewer_bye_at = time.monotonic()
+        return {"ok": True}
+
     @app.get("/api/records/sessions")
     def api_sessions():
         import sys

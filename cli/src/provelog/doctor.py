@@ -38,17 +38,21 @@ def _latest_stamp(root: Path) -> str | None:
             continue
         for anchor in manifest.get("anchors") or []:
                                                                       
+                                                                         
                                                                            
-                                       
+                                                                
             token: Any = anchor
             value = ""
-            for _ in range(4):
+            for _ in range(6):
                 if not isinstance(token, dict):
                     break
                 value = str(token.get("gen_time") or "")
                 if value:
                     break
-                token = token.get("receipt")
+                nested = token.get("receipt")
+                if not isinstance(nested, dict):
+                    nested = token.get("agg_receipt")
+                token = nested
             if value and (latest is None or value > latest):
                 latest = value
     return latest

@@ -819,9 +819,9 @@ body.lb-open{overflow:hidden}
   <aside id="side">
     <div class="side-top">
       <div class="brandrow">
-        <span class="logo" title="ProveLog"><svg class="cv"
+        <a class="logo" id="brand-home" href="#" title="ProveLog"><svg class="cv"
           viewBox="0 0 52.82 101.00" aria-hidden="true"><path
-          d="M9.00 9.00 L43.82 50.50 L9.00 92.00"/></svg>provelog</span>
+          d="M9.00 9.00 L43.82 50.50 L9.00 92.00"/></svg>provelog</a>
       </div>
       <nav id="agents" class="agents" aria-label="Agents"></nav>
     </div>
@@ -976,11 +976,24 @@ function surfaceLabel(surface) {
   return row ? (row[state.lang] || row.en) : String(surface || "");
 }
 function tsaLabel(provider) {
-  const p = String(provider || "").trim();
-  if (/^sectigo/i.test(p)) return "Sectigo";
-  if (/^freetsa/i.test(p)) return "FreeTSA";
-  if (/^(?:provelog\s+)?test[\s-]?tsa/i.test(p)) return "TestTSA";
-  return p;
+  const raw = String(provider || "").trim();
+  if (!raw) return "";
+  
+  
+  
+  let host = raw;
+  try {
+    host = new URL(raw).hostname || raw;
+  } catch (e) {
+    
+  }
+  const p = host.toLowerCase();
+  if (p.includes("sectigo")) return "Sectigo";
+  if (p.includes("freetsa")) return "FreeTSA";
+  if (p.includes("digicert")) return "DigiCert";
+  if (p.includes("certum")) return "Certum";
+  if (/^(?:provelog[\s-]+)?test[\s-]?tsa/.test(p)) return "TestTSA";
+  return raw;
 }
 const DARK_GLYPH_LOGOS = new Set(["cline", "copilot", "hermes", "pi"]);
 const DARK_TILE_LOGOS = new Set(["cursor", "omp", "roo", "opencode", "zcode", "kilo"]);
@@ -3983,6 +3996,16 @@ async function boot() {
   setInterval(softRefresh, 10000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) softRefresh(); });
   window.addEventListener("focus", softRefresh);
+  
+  
+  
+  window.addEventListener("pagehide", () => {
+    try {
+      const base = location.pathname.endsWith("/")
+        ? location.pathname : location.pathname + "/";
+      navigator.sendBeacon(base + "__provelog/bye");
+    } catch (e) {  }
+  });
 
   
   
