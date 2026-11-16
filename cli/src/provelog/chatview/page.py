@@ -819,7 +819,8 @@ body.lb-open{overflow:hidden}
   <aside id="side">
     <div class="side-top">
       <div class="brandrow">
-        <a class="logo" id="brand-home" href="#" title="ProveLog"><svg class="cv"
+        <a class="logo" href="https://provelog.ai/" target="_blank"
+           rel="noopener noreferrer" title="ProveLog" aria-label="ProveLog"><svg class="cv"
           viewBox="0 0 52.82 101.00" aria-hidden="true"><path
           d="M9.00 9.00 L43.82 50.50 L9.00 92.00"/></svg>provelog</a>
       </div>

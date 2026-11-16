@@ -20,7 +20,7 @@ const HUMAN_OVERSIGHT = "human_oversight";
 const MODEL_CALL = "model_call";
 const HEARTBEAT = "lifecycle.heartbeat";
 const JS_SAFE_INT_MAX = Number.MAX_SAFE_INTEGER; 
-const VERIFIER_VERSION = "1.2.5";
+const VERIFIER_VERSION = "1.2.6";
 
 
 const subtle = globalThis.crypto.subtle;

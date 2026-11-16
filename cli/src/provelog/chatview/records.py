@@ -15,6 +15,7 @@ filtered out of the conversation (it is preserved in the record itself).
 from __future__ import annotations
 
 import json
+import ntpath
 import re
 import shutil
 from datetime import UTC, datetime
@@ -330,7 +331,7 @@ def _child_row(store, folder: Path, manifest: dict[str, Any], child_id: str,
         "title": title,
         "kind": kind,
         "mode": "seeded" if meta["is_fork"] else "subagent",
-        "project": str(meta.get("cwd") or ""),
+        "project": _normalize_project(str(meta.get("cwd") or "")),
         "seeded_prefix": bool(meta["seeded"]),
         "delegation_depth": int(meta["depth"]),
         "tokens": int(meta.get("tokens") or 0),
@@ -582,8 +583,24 @@ def _is_scratch_project(project: str) -> bool:
     return False
 
 
+def _normalize_project(project: str) -> str:
+    """One grouping key for one Windows workspace.
+
+    Windows paths are case-insensitive and accept both separators. Hosts record
+    the same folder in different spellings (for example ``C:\\...\\23`` and
+    ``c:\\...\\23``); the viewer must not turn that into two workspaces that
+    both render as "23".
+    """
+    value = str(project or "").strip()
+    if not value:
+        return ""
+    if re.match(r"^(?:[A-Za-z]:[\\/]|\\\\)", value):
+        return ntpath.normcase(ntpath.normpath(value))
+    return value
+
+
 def _project_for(store, folder: Path, manifest: dict[str, Any]) -> str:
-    project = str(manifest.get("project") or manifest.get("cwd") or "")
+    project = _normalize_project(str(manifest.get("project") or manifest.get("cwd") or ""))
     if project:
         return "" if _is_scratch_project(project) else project
     sid = str(manifest.get("session_id") or "")
@@ -598,7 +615,7 @@ def _project_for(store, folder: Path, manifest: dict[str, Any]) -> str:
         try:
             from .. import import_dsh
             header, _events = import_dsh.read_log(Path(source))
-            project = str(header.get("cwd") or "")
+            project = _normalize_project(str(header.get("cwd") or ""))
         except Exception:
             project = ""
         if project:
@@ -610,11 +627,11 @@ def _project_for(store, folder: Path, manifest: dict[str, Any]) -> str:
     cached = _PROJECT_CACHE.get(folder_key)
     if cached is not None:
         return cached
-    project = _project_from_preview(folder)
+    project = _normalize_project(_project_from_preview(folder))
     if project:
         _PROJECT_CACHE[folder_key] = project
         return project
-    return folder.parent.name
+    return _normalize_project(folder.parent.name)
 
 
 def _visible_user_turns(store: Any, stream: str) -> int | None:
