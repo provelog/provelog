@@ -558,6 +558,10 @@ function _hexDigest(value) {
   return s.toLowerCase();
 }
 
+function _isAttachmentPath(name) {
+  return /(^|\/)attachments\//.test(String(name));
+}
+
 function _attachmentDigests(bundle) {
   const digests = new Set();
   const visit = (node) => {
@@ -660,7 +664,7 @@ async function _verifyAttachments(bundle, packFiles, rep) {
   
   
   for (const [name, data] of entries) {
-    if (!String(name).startsWith("attachments/")) continue;
+    if (!_isAttachmentPath(name)) continue;
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
     const h = await sha256Hex(bytes);
     const base = String(name).split("/").pop();

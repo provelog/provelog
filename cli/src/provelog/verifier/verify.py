@@ -651,6 +651,10 @@ def _attachment_digests(bundle: dict[str, Any]) -> set[str]:
     return digests
 
 
+def _is_attachment_path(name: str) -> bool:
+    return "attachments" in name.split("/")[:-1]
+
+
 def _verify_attachments(bundle: dict[str, Any], pack_files: dict[str, bytes] | None,
                         rep: Report) -> None:
     """Attachment bytes: swapped bytes fail, missing bytes warn, injected files fail.
@@ -747,7 +751,7 @@ def _verify_attachments(bundle: dict[str, Any], pack_files: dict[str, bytes] | N
                                                                              
                                                                               
              
-    for name in sorted(n for n in pack_files if n.startswith("attachments/")):
+    for name in sorted(n for n in pack_files if _is_attachment_path(n)):
         data = pack_files[name]
         h = hashlib.sha256(data).hexdigest()
         base = name.rsplit("/", 1)[-1]
