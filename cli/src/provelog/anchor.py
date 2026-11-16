@@ -129,7 +129,7 @@ class RFC3161Anchor:
         import httpx
         from rfc3161_client import TimestampRequestBuilder
 
-        from .tsa_der import decode_timestamp_response
+        from .tsa_der import decode_timestamp_response, normalize_token
 
         root = _checked_root(root_hex)
         req = TimestampRequestBuilder().data(bytes.fromhex(root)).build()
@@ -152,7 +152,13 @@ class RFC3161Anchor:
             elif resp.status_code >= 400:
                 self.stats["http_other_error"] += 1
             resp.raise_for_status()
-            tst = decode_timestamp_response(resp.content)
+                                                                          
+                                                                         
+                                                                             
+                                                                              
+                                        
+            raw = normalize_token(resp.content)
+            tst = decode_timestamp_response(raw)
             gen_time = tst.tst_info.gen_time.astimezone(UTC).strftime(
                 "%Y-%m-%dT%H:%M:%S.%fZ"
             )
@@ -162,7 +168,7 @@ class RFC3161Anchor:
                 kind="rfc3161",
                 merkle_root=root,
                 gen_time=gen_time,
-                token_b64=base64.b64encode(resp.content).decode("ascii"),
+                token_b64=base64.b64encode(raw).decode("ascii"),
                 tsa_url=self.tsa_url,
             )
         except Exception as e:

@@ -812,6 +812,18 @@ body.lb-open{overflow:hidden}
 .selection-mode .item .acts{opacity:1!important;visibility:visible!important;pointer-events:auto!important;position:static!important;display:flex;flex:none;background:none}
 .selection-mode .item .t,.selection-mode .folder .fname{min-width:0;flex:1}
 .selection-mode .item .meta{display:none}
+
+
+
+#flow{container-type:inline-size}
+@container (max-width:1200px){
+  .tmark,.turnsec[data-st]::before,.tbound::before{display:none}
+  .twho .tinl{display:inline-flex}
+}
+@media (max-width:1400px){
+  .tmark,.turnsec[data-st]::before,.tbound::before{display:none}
+  .twho .tinl{display:inline-flex}
+}
 </style>
 </head>
 <body>
