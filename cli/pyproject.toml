@@ -1,6 +1,6 @@
 [project]
 name = "provelog"
-version = "1.2.6"
+version = "1.2.7"
 description = "A verifiable, complete trajectory record for AI agents. Stores model and tool inputs/outputs locally as an Ed25519-signed, hash-chained record with RFC 3161 anchoring that anyone can verify offline. Records only: it never blocks or intercepts."
 readme = "README.md"
 license = "MIT AND AGPL-3.0-or-later"
