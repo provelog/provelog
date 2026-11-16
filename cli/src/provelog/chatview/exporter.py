@@ -254,6 +254,8 @@ def _embedded_anchors(ev: Evidence, rows: list[dict]) -> list[dict]:
     token = wrapper.get("receipt") if isinstance(wrapper.get("receipt"), dict) else wrapper
     if not isinstance(token, dict) or not token.get("kind"):
         return []
+    from ..tsa_der import normalize_receipt_tokens
+    token = normalize_receipt_tokens(token)
     leaves = [r["server_record_hash"] for r in rows
               if int(r.get("recv_seq", -1)) < covers]
     if len(leaves) != covers:
@@ -453,8 +455,10 @@ def session_pack_bytes(home: Path, ev: Evidence, scope: str = "all"
     bundle, rows = build_bundle(ev, scope)
     extra: dict[str, bytes] = {}
     if ev.anchor_receipt is not None:
+        from ..tsa_der import normalize_receipt_tokens
         extra["anchor.json"] = json.dumps(
-            ev.anchor_receipt, indent=2, ensure_ascii=False).encode("utf-8")
+            normalize_receipt_tokens(ev.anchor_receipt), indent=2,
+            ensure_ascii=False).encode("utf-8")
     extra.update(_record_files(ev, scope))
     return build_pack(bundle, extra_files=extra or None,
                       guide=_verify_txt(ev, rows, scope, extra)), len(rows)

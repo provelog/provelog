@@ -88,3 +88,38 @@ def decode_timestamp_response(raw: bytes):
     """The package's decode choke point: normalize, then strict-decode."""
     from rfc3161_client import decode_timestamp_response as _strict
     return _strict(normalize_token(raw))
+
+
+def normalize_receipt_tokens(receipt: dict) -> dict:
+    """Return a copy of a receipt with every RFC 3161 token normalized.
+
+    Relay aggregate receipts keep the token under ``agg_receipt.token_b64``;
+    that token is not part of the aggregate commitment (the relay commits to
+    the stream root, not the TSA response), so normalizing it is safe and makes
+    exported packs strict-DER parseable. Historical stored receipts are only
+    copied on the way out, never rewritten in place.
+    """
+    import base64
+
+    out = dict(receipt)
+    for key in ("agg_receipt", "receipt"):
+        child = out.get(key)
+        if not isinstance(child, dict):
+            continue
+        child = dict(child)
+        token = child.get("token_b64")
+        if token:
+            try:
+                child["token_b64"] = base64.b64encode(
+                    normalize_token(base64.b64decode(token))).decode("ascii")
+            except (ValueError, TypeError):
+                pass
+        out[key] = child
+    token = out.get("token_b64")
+    if token:
+        try:
+            out["token_b64"] = base64.b64encode(
+                normalize_token(base64.b64decode(token))).decode("ascii")
+        except (ValueError, TypeError):
+            pass
+    return out

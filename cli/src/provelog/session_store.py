@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -41,6 +43,37 @@ class SeqGap(Exception):
 
 class SeqConflict(Exception):
     pass
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write beside the target, then replace with a short Windows retry.
+
+    Defender/Search/Explorer can hold manifest.json open for a few hundred ms,
+    and a fixed tmp name collides when the collector and an export write at
+    once. A unique tmp name plus three attempts turns a transient WinError 5
+    into a successful write instead of a lost import pass.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        for attempt in range(3):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep((0.05, 0.15, 0.40)[attempt])
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 TRAJECTORY = "trajectory.jsonl"
@@ -811,14 +844,9 @@ class SessionStore:
                                                                   
         manifest["last_activity"] = str(
             manifest.get("last_activity") or manifest.get("created_at") or _now())
-        tmp = folder / ".manifest.json.tmp"
-        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                       encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, folder / "manifest.json")
+        _atomic_write_text(
+            folder / "manifest.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
     def _all_records(self) -> list[tuple[str, dict[str, Any]]]:
         rows: list[tuple[str, dict[str, Any]]] = []
@@ -871,14 +899,7 @@ class SessionStore:
         except (OSError, ValueError):
             rows = []
         rows.append({"chain": chain, "parent": parent, "at": _now()})
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(rows[-1000:], indent=2) + "\n", encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, path)
+        _atomic_write_text(path, json.dumps(rows[-1000:], indent=2) + "\n")
         self._discarded_cache = {str(r.get("chain")) for r in rows[-1000:]}
 
     @staticmethod
@@ -911,16 +932,8 @@ class SessionStore:
         rows = self.orphans()
         rows[session_id] = parent or ""
         path = self._orphans_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({k: {"parent": v, "at": _now()}
-                                   for k, v in rows.items()}, indent=2) + "\n",
-                       encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, path)
+        _atomic_write_text(path, json.dumps({k: {"parent": v, "at": _now()}
+                                              for k, v in rows.items()}, indent=2) + "\n")
 
     def clear_orphan(self, session_id: str) -> None:
         rows = self.orphans()
@@ -928,15 +941,8 @@ class SessionStore:
             return
         rows.pop(session_id, None)
         path = self._orphans_path()
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({k: {"parent": v, "at": _now()}
-                                   for k, v in rows.items()}, indent=2) + "\n",
-                       encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, path)
+        _atomic_write_text(path, json.dumps({k: {"parent": v, "at": _now()}
+                                              for k, v in rows.items()}, indent=2) + "\n")
 
     def _child_skip(self, meta: dict[str, Any], chain: str,
                     parent: str) -> dict[str, Any] | None:
@@ -1618,13 +1624,7 @@ class SessionStore:
             chain for chain, who in (manifest.get("chain_sessions") or {}).items()
             if who and _bare_id(who) != _bare_id(parent_id))
         path = folder / TRANSCRIPT_NAME
-        tmp = folder / (".tmp-" + TRANSCRIPT_NAME)
-        tmp.write_text(_render_transcript(envs, title, child_chains), encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, path)
+        _atomic_write_text(path, _render_transcript(envs, title, child_chains))
         manifest["canonical"] = [
             TRAJECTORY_ZST if _CODEC.available else TRAJECTORY,
             TRANSCRIPT_NAME, "manifest.json"]
@@ -1885,6 +1885,9 @@ class SessionStore:
         self._write_index()
 
     def resolve_pending_anchor(self, stream_id: str, receipt: dict[str, Any]) -> None:
+        from .tsa_der import normalize_receipt_tokens
+
+        receipt = normalize_receipt_tokens(receipt)
         anchor_id = str(receipt.get("anchor_id") or "")
         if not anchor_id:
             return

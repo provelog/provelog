@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import warnings
 from pathlib import Path
 
@@ -241,6 +242,16 @@ def _cmd_status(args) -> int:
     else:
         print("Records:            None yet")
     print(f"Records directory:  {store_path}")
+    try:
+        ie = json.loads((Path.home() / ".provelog" / "import-errors.json").read_text(encoding="utf-8"))
+        ie_errors = ie.get("errors") if isinstance(ie, dict) else None
+        if isinstance(ie_errors, list) and ie_errors:
+            age_min = max(0, int((time.time() - float(ie.get("at") or 0)) / 60))
+            print(f"Import errors:      {len(ie_errors)} ({age_min} min ago)")
+        else:
+            print("Import errors:      none")
+    except (OSError, ValueError, TypeError):
+        print("Import errors:      none")
 
     if not total:
         print()
@@ -346,6 +357,8 @@ def _bundle_anchors(store, stream_id: str, records: list[dict]) -> list[dict]:
             continue
         wrapper = entry.get("receipt") or {}
         token = wrapper.get("receipt") if isinstance(wrapper, dict) and isinstance(wrapper.get("receipt"), dict) else wrapper
+        from .tsa_der import normalize_receipt_tokens
+        token = normalize_receipt_tokens(token)
         anchors.append({"anchor_seq": len(anchors), "covers_up_to": covers, "receipt": token})
     return anchors
 
@@ -494,9 +507,14 @@ def _record_import_errors(rows) -> None:
     errors = [{"session_id": str(r.get("session_id") or ""),
                "error": str(r.get("error") or "")}
               for r in rows if r.get("error")]
-    if not errors:
-        return
     target = Path.home() / ".provelog" / "import-errors.json"
+    if not errors:
+                                                                            
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps({"at": time.time(), "errors": errors[:20]},

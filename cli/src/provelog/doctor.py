@@ -172,9 +172,12 @@ def _import_error_check() -> Check | None:
         age = 1e9
     if age > 24 * 3600:
         return None
+    age_min = max(0, int(age // 60))
+    when = ("in the last collector pass" if age < 300
+            else f"last seen {age_min} min ago")
     return Check("imports", "warn",
-                 f"{len(errors)} import error(s) in the last collector pass",
-                 "see ~/.provelog/logs/watch.log and `provelog status`")
+                 f"{len(errors)} import error(s) {when}",
+                 "see ~/.provelog/import-errors.json and `provelog status`")
 
 
 def run(home: Path | None = None, *, offline: bool = False) -> Report:
@@ -263,7 +266,8 @@ def run(home: Path | None = None, *, offline: bool = False) -> Report:
                 "collector", "warn",
                 f"{len(stalled)} source file(s) grew but capture has not advanced",
                 "restart the collector with `provelog setup` and check "
-                "~/.provelog/logs/watch.log; otherwise new turns are not recorded"))
+                "see ~/.provelog/import-errors.json and `provelog status`; "
+                "otherwise new turns are not recorded"))
     else:
         checks.append(Check("collector", "warn", "Background collector is not installed",
                             "run `provelog setup`; new conversations will not be recorded"))
