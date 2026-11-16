@@ -1385,7 +1385,11 @@ def _rfc_anchor_cover(bundle: dict[str, Any]) -> list[tuple[int, str, str]]:
     for a in bundle.get("anchors") or []:
         r = a.get("receipt") or {}
         shared = r.get("agg_receipt") or {}
-        kind = r.get("kind") or shared.get("kind")
+                                                                           
+                                                                            
+        kind = r.get("kind")
+        if kind in (None, "aggregate"):
+            kind = shared.get("kind")
         if kind != "rfc3161":
             continue
         try:

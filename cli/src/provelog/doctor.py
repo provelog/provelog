@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -192,7 +193,9 @@ def run(home: Path | None = None, *, offline: bool = False) -> Report:
                             "attribution without it"))
     else:
         mode = stat.S_IMODE(key.stat().st_mode)
-        if mode & 0o077:
+                                                                              
+                                                                              
+        if sys.platform != "win32" and mode & 0o077:
             checks.append(Check("key", "warn",
                                 f"Device key permissions are too open: {key}",
                                 "chmod 600 the key; old records still verify, "
@@ -253,6 +256,14 @@ def run(home: Path | None = None, *, offline: bool = False) -> Report:
 
     if onboarding.watch_agent_installed():
         checks.append(Check("collector", "ok", "Background collector is installed"))
+        from . import capture_state
+        stalled = capture_state.stalled_sources()
+        if stalled:
+            checks.append(Check(
+                "collector", "warn",
+                f"{len(stalled)} source file(s) grew but capture has not advanced",
+                "restart the collector with `provelog setup` and check "
+                "~/.provelog/logs/watch.log; otherwise new turns are not recorded"))
     else:
         checks.append(Check("collector", "warn", "Background collector is not installed",
                             "run `provelog setup`; new conversations will not be recorded"))

@@ -92,3 +92,33 @@ def mark_deleted(session_id: str, at_ms: int | None = None) -> None:
     entry = data["sessions"].setdefault(str(session_id), {})
     entry["deleted_at_ms"] = int(at_ms if at_ms is not None else _time.time() * 1000)
     _save(data)
+
+
+def stalled_sources(now: float | None = None, min_age_s: float = 900.0,
+                    active_within_s: float = 86400.0) -> list[Path]:
+    """Source files that grew after the last recorded watermark.
+
+    A collector killed by its parent Job Object cannot keep the watermark
+    current; comparing source size with the last commit is a cheap detector.
+    Only sources whose last commit is older than `min_age_s` are returned, so
+    an ordinary ten-second polling interval does not look stalled.
+    """
+    import time
+
+    now = time.time() if now is None else now
+    out: list[Path] = []
+    for entry in load().get("sessions", {}).values():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            source = Path(str(entry.get("source_path") or ""))
+            recorded = int(entry.get("source_size") or 0)
+            commit_at = float(entry.get("commit_at") or 0)
+            actual_stat = source.stat()
+        except (OSError, TypeError, ValueError):
+            continue
+        if actual_stat.st_mtime < now - active_within_s:
+            continue
+        if source not in out and actual_stat.st_size > recorded and commit_at and now - commit_at >= min_age_s:
+            out.append(source)
+    return out

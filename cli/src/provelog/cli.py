@@ -221,7 +221,11 @@ def _cmd_status(args) -> int:
         print()
         print("Run provelog doctor to check the collector.")
         return 0
-    print("Collector:          Installed")
+    from . import capture_state
+    stalled = [] if paused.get("paused") else capture_state.stalled_sources()
+    print("Collector:          " + (
+        f"Installed (not advancing: {len(stalled)} source file(s))"
+        if stalled else "Installed"))
 
     endpoint = str(cfg.get("anchor_endpoint") or "https://provelog.ai").rstrip("/")
     alive = False
