@@ -622,7 +622,7 @@ def run(args):
         say("Selected: " + sel.describe(targets[0]) + "\n")
     else:
         say(f"Selected {len(targets)} conversations.\n")
-    items, failures = [], []
+    items, failures, backend_failures = [], [], []
     for index, row in enumerate(targets, 1):
         if len(targets) == 1:
             say("Checking records, attachments and timestamps…")
@@ -638,6 +638,12 @@ def run(args):
             item = assess(
                 {"row": dict(row), "bundle": copy.deepcopy(bundle), "files": files, "missing": missing}
             )
+            if item["rep"].result == "cannot_verify":
+                                                                            
+                                                                           
+                backend_failures.append(
+                    f"  {sel._title(row)}: {reason(item)}")
+                continue
             if blocked(item):
                 raise ValueError(reason(item))
             items.append(item)
@@ -650,6 +656,17 @@ def run(args):
             failures.append(f"  {sel._title(row)}: {exc}")
     if len(targets) > 1 and sys.stderr.isatty():
         say()
+    if backend_failures:
+        say(
+            "Cannot export: verification backend unavailable.\n"
+            + "\n".join(backend_failures)
+            + "\n\nNo file was written. The conversations are intact; this machine "
+              "cannot decode RFC 3161 tokens.\n"
+              "Verify a pack with verify-offline.html in a browser, or export on a "
+              "machine where the native extension is permitted (a WDAC/AV policy can "
+              "block it)."
+        )
+        return 1
     if failures:
         say(
             "Cannot export the selected conversations.\n"

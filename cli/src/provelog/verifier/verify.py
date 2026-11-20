@@ -78,6 +78,15 @@ FORMAT_ERROR_CODES = frozenset({
     "malformed_bundle",                                                                  
 })
 
+                                                                                
+                                                                            
+                                                                               
+                                                             
+BACKEND_ERROR_CODES = frozenset({
+    "verification_backend_unavailable",
+    "rfc3161_support_missing",
+})
+
 
 @dataclass
 class Axes:
@@ -123,10 +132,15 @@ class Report:
                                                                                 
         if fails == ["empty"]:
             return "empty"
+        if all(code in BACKEND_ERROR_CODES for code in fails):
+                                                                                   
+            return "cannot_verify"
         return "tampered"
 
     def to_dict(self, strict: bool = False) -> dict[str, Any]:
-        return {
+        backend = [f.detail for f in self.findings
+                   if f.code in BACKEND_ERROR_CODES]
+        out = {
             "ok": self.ok,
             "result": self.result,
             "verdict": _result_word(self, strict),
@@ -135,6 +149,11 @@ class Report:
             "findings": [f.__dict__ for f in self.findings],
             "axes": asdict(self.axes),
         }
+        if backend:
+                                                                            
+                                                                         
+            out["backend_error"] = " ".join(backend)
+        return out
 
 
 def _by_arrival_sid(server_records: list[dict[str, Any]]) -> dict[Any, list[Any]]:
@@ -194,7 +213,16 @@ def _axes_for(bundle: dict[str, Any], findings: list[Finding]) -> Axes:
                                                                        
                                                                         
                                                                              
-    integrity = "unknown" if n == 0 else ("fail" if fails else "pass")
+                                                                        
+    backend_only = bool(fails) and all(code in BACKEND_ERROR_CODES for code in fails)
+    if n == 0:
+        integrity = "unknown"
+    elif fails and not backend_only:
+        integrity = "fail"
+    elif backend_only:
+        integrity = "unknown"
+    else:
+        integrity = "pass"
 
     bad_time = {
         "anchor_sig_invalid", "anchor_decode_error", "anchor_time_mismatch",
@@ -206,6 +234,9 @@ def _axes_for(bundle: dict[str, Any], findings: list[Finding]) -> Axes:
         for a in anchors)
     if codes & bad_time:
         time = "fail"
+    elif codes & BACKEND_ERROR_CODES:
+                                                                        
+        time = "unknown"
     elif codes & {"no_anchor", "local_anchor_only", "anchor_local_only"}:
         time = "absent"
     elif "anchor_unverified_tsa" in codes:
@@ -238,7 +269,10 @@ def _axes_for(bundle: dict[str, Any], findings: list[Finding]) -> Axes:
     covers = [_as_int(a.get("covers_up_to")) for a in anchors if isinstance(a, dict)]
     covered = max(covers, default=0)
     after_anchor = bool(codes & {"recv_after_anchor", "ts_after_anchor"})
-    if n and covered >= n and not after_anchor:
+    if backend_only:
+                                                                               
+        coverage = "unknown"
+    elif n and covered >= n and not after_anchor:
         coverage = "complete"
     elif covered > 0 or after_anchor:
         coverage = "partial"
@@ -255,12 +289,15 @@ def _axes_text(rep: Report, bundle: dict[str, Any]) -> str:
     covered = max((int(x.get("covers_up_to") or 0)
                    for x in (source.get("anchors") or [])
                    if isinstance(x, dict)), default=0)
+    backend = any(f.code in BACKEND_ERROR_CODES for f in rep.findings)
     if a.integrity == "pass":
         integrity = (f"{n} records, hash chain and signatures verified"
                      if a.attribution == "pass" else
                      f"{n} records, hash chain verified")
     elif a.integrity == "fail":
         integrity = "integrity failure; do not rely on this file"
+    elif backend:
+        integrity = "verification backend unavailable; integrity was not checked"
     else:
         integrity = "not enough data to judge integrity"
     time = {
@@ -268,6 +305,7 @@ def _axes_text(rep: Report, bundle: dict[str, Any]) -> str:
         "absent": "no timestamp in this bundle",
         "untrusted": "timestamp present, TSA not in the recognized list (Sectigo, FreeTSA)",
         "fail": "timestamp invalid",
+        "unknown": "timestamp not checked (verification backend unavailable)",
     }.get(a.time, "no timestamp in this bundle")
     attribution = {
         "pass": "device signature verified",
@@ -279,12 +317,16 @@ def _axes_text(rep: Report, bundle: dict[str, Any]) -> str:
                                                                         
         coverage_value = "n/a"
         coverage = "not applicable (integrity failed)"
+    elif a.integrity == "unknown" and backend:
+        coverage_value = "n/a"
+        coverage = "not applicable (verification backend unavailable)"
     else:
         coverage_value = a.coverage
         coverage = {
             "complete": f"{covered} / {n} records covered by a timestamp",
             "partial": f"{covered} / {n} records covered by a timestamp",
             "none": f"0 / {n} records covered by a timestamp",
+            "unknown": "not applicable (verification backend unavailable)",
         }.get(a.coverage, f"0 / {n} records covered by a timestamp")
         if covered > 0 and a.time != "pass":
             coverage += {
@@ -300,6 +342,9 @@ def _axes_text(rep: Report, bundle: dict[str, Any]) -> str:
     ]
     if a.integrity == "fail":
         conclusion = "Do not rely on this record."
+    elif backend:
+        conclusion = ("This verifier could not run here; that is not a verdict on "
+                      "the evidence.")
     elif a.integrity != "pass":
         conclusion = "No integrity verdict was reached."
     elif a.time != "pass":
@@ -329,6 +374,8 @@ def _result_word(rep: Report, strict: bool = False) -> str:
         return "NOT A PROVELOG BUNDLE"
     if rep.result == "empty":
         return "NO RECORDS"
+    if rep.result == "cannot_verify":
+        return "CANNOT VERIFY"
     a = rep.axes
     if a.integrity == "fail":
         return "TAMPERING DETECTED"
@@ -371,6 +418,7 @@ def _human_verify(rep: Report, bundle: dict[str, Any], display_name: str,
 
     result = _result_word(rep, strict)
 
+    backend = any(f.code in BACKEND_ERROR_CODES for f in rep.findings)
     integrity = (
         (f"{n} records; hashes and signatures verified"
          if a.attribution == "pass" else
@@ -378,6 +426,8 @@ def _human_verify(rep: Report, bundle: dict[str, Any], display_name: str,
         if a.integrity == "pass" else
         "Record integrity verification failed"
         if a.integrity == "fail" else
+        "Verification backend unavailable; integrity was not checked"
+        if backend else
         "No integrity verdict was reached"
     )
     time = {
@@ -385,6 +435,7 @@ def _human_verify(rep: Report, bundle: dict[str, Any], display_name: str,
         "absent": "No trusted third-party timestamp",
         "untrusted": "Timestamp authority is not in ProveLog's recognized TSA list (Sectigo, FreeTSA)",
         "fail": "Timestamp verification failed",
+        "unknown": "Timestamp was not checked (verification backend unavailable)",
     }.get(a.time, "No trusted third-party timestamp")
     attribution = {
         "pass": "Device signatures verified",
@@ -393,6 +444,9 @@ def _human_verify(rep: Report, bundle: dict[str, Any], display_name: str,
     }.get(a.attribution, "No device signatures")
     if a.integrity == "fail":
         cov_value, coverage = "N/A", "not applicable (integrity failed)"
+    elif a.integrity == "unknown" and backend:
+        cov_value = "N/A"
+        coverage = "not applicable (verification backend unavailable)"
     else:
         cov_value = a.coverage.upper()
         if a.coverage == "complete" and a.time == "pass":
@@ -413,6 +467,18 @@ def _human_verify(rep: Report, bundle: dict[str, Any], display_name: str,
     print(f"{'Attribution':<13}{a.attribution.upper():<10}{attribution}")
     print(f"{'Coverage':<13}{cov_value:<10}{coverage}")
 
+    if result == "CANNOT VERIFY":
+        print()
+        detail = next((f.detail for f in rep.findings
+                       if f.code in BACKEND_ERROR_CODES), "")
+        if detail:
+            print(f"Reason: {detail}", file=_sys.stderr)
+        print("This is not a verdict on the evidence: this machine's verifier could "
+              "not load the RFC 3161 decoder.", file=_sys.stderr)
+        print("Next: open verify-offline.html from the pack in a browser, or run "
+              "provelog verify on a machine where the native extension is permitted "
+              "(a WDAC/AV policy can block it; `python -m provelog` works when the "
+              "provelog.exe launcher is blocked).", file=_sys.stderr)
     if result == "VERIFIED" and a.integrity == "pass" and a.time == "pass" and a.coverage == "complete":
         rfc = _rfc_anchor_cover(source)
         if rfc:
@@ -1148,8 +1214,22 @@ def _verify_anchor_receipt(receipt: dict[str, Any], rep: Report, seq: Any) -> st
                         f"verifier cannot decode it. Reinstall to get trusted-time support: "
                         f"uv tool install --reinstall provelog (or pip install -U 'provelog').")
                 return "fail"
+            except (ImportError, OSError) as e:
+                                                                                   
+                                                                              
+                rep.add("fail", "verification_backend_unavailable",
+                        f"anchor {seq}: the RFC 3161 backend could not be loaded on this "
+                        f"machine ({e}). The evidence itself has not been judged.")
+                return "fail"
             raw = base64.b64decode(receipt["token_b64"])
-            tst = decode_timestamp_response(raw)
+            try:
+                tst = decode_timestamp_response(raw)
+            except (ImportError, ModuleNotFoundError, OSError) as e:
+                                                                                   
+                rep.add("fail", "verification_backend_unavailable",
+                        f"anchor {seq}: the RFC 3161 decoder is unavailable on this machine "
+                        f"({e}). The evidence itself has not been judged.")
+                return "fail"
             mi = tst.tst_info.message_imprint
             oid = getattr(mi.hash_algorithm, "dotted_string", "") or getattr(mi.hash_algorithm, "_name", "")
             alg = _DIGEST_OIDS.get(oid, oid).lower()
@@ -1200,6 +1280,11 @@ def _verify_anchor_receipt(receipt: dict[str, Any], rep: Report, seq: Any) -> st
                     f"anchor {seq}: RFC3161 trusted timestamp from {receipt.get('tsa_url')} "
                     f"at {token_time}, signature and cert chain validated")
             return "trusted"
+        except (ImportError, ModuleNotFoundError, OSError) as e:  # pragma: no cover
+            rep.add("fail", "verification_backend_unavailable",
+                    f"anchor {seq}: the RFC 3161 backend is unavailable on this machine "
+                    f"({e}). The evidence itself has not been judged.")
+            return "fail"
         except Exception as e:  # pragma: no cover
             rep.add("fail", "anchor_decode_error", f"anchor {seq}: cannot decode RFC3161 token: {e}")
             return "fail"
@@ -1466,6 +1551,11 @@ def load_bundle_path(path: str) -> tuple[dict[str, Any], str, dict[str, bytes] |
 
 def _exit_code_for(rep: Report, strict: bool) -> int:
     """The process exit code for one report (shared by single packs and members)."""
+    if rep.result == "cannot_verify":
+                                                                             
+                                                                            
+                                         
+        return 7
     if strict:
         if rep.axes.integrity != "pass":
             return 1
@@ -1489,12 +1579,16 @@ def _exit_code_for(rep: Report, strict: bool) -> int:
     return 0
 
 
-_COLLECTION_RANK = {1: 5, 3: 4, 4: 3, 5: 2, 0: 1}
+                                                                          
+                                                                      
+_COLLECTION_RANK = {1: 6, 7: 5, 3: 4, 4: 3, 5: 2, 0: 1}
 
 
 def _collection_verdict(words: list[str]) -> str:
     if any(w == "TAMPERING DETECTED" for w in words):
         return "TAMPERING DETECTED"
+    if any(w == "CANNOT VERIFY" for w in words):
+        return "CANNOT VERIFY"
     if words and all(w.startswith("VERIFIED") for w in words):
         if any(w.endswith("(partial timestamp coverage)") for w in words):
             return "VERIFIED (partial timestamp coverage)"
@@ -1504,6 +1598,8 @@ def _collection_verdict(words: list[str]) -> str:
 
 def _collection_reason(rep: Report) -> str:
     a = rep.axes
+    if rep.result == "cannot_verify":
+        return "verification backend unavailable"
     if a.integrity == "fail":
         return "record integrity failed"
     if a.time == "untrusted":

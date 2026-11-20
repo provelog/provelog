@@ -72,6 +72,32 @@ def _stamp_age_hours(value: str | None) -> float | None:
     return max(0.0, (datetime.now(UTC) - dt).total_seconds() / 3600)
 
 
+def _backend_check() -> Check:
+    """Can this machine decode RFC 3161 tokens at all?
+
+    Separate from `chains` because a blocked/absent native extension says
+    nothing about the records: it says this reader cannot judge the time here.
+    """
+    hint = ("verify a pack with verify-offline.html in a browser, or run "
+            "provelog on a machine where the RFC 3161 extension is permitted; "
+            "`python -m provelog` works when the provelog.exe launcher is blocked")
+    try:
+        from rfc3161_client import VerifierBuilder  # noqa: F401
+
+        from .tsa_der import decode_timestamp_response
+    except (ImportError, ModuleNotFoundError, OSError) as exc:
+        return Check("backend", "fail",
+                     f"RFC 3161 verifier cannot load: {exc}", hint)
+    try:
+        decode_timestamp_response(b"")                                            
+    except (ImportError, ModuleNotFoundError, OSError) as exc:
+        return Check("backend", "fail",
+                     f"RFC 3161 verifier cannot be called: {exc}", hint)
+    except Exception:                      # noqa: BLE001 - it ran and refused garbage
+        pass
+    return Check("backend", "ok", "RFC 3161 verifier loads and runs")
+
+
 def _chain_check(home: Path, store_path: Path) -> Check:
     from .cli import _local_bundle
     from .store import open_store
@@ -87,12 +113,17 @@ def _chain_check(home: Path, store_path: Path) -> Check:
                        if row.get("stream_id")]
             checked = 0
             broken: list[str] = []
+            unjudged = 0
             for stream in streams:
                 bundle = _local_bundle(store, stream)
                 if not bundle.get("records"):
                     continue
                 checked += 1
                 rep = verify_bundle(bundle)
+                if rep.result == "cannot_verify":
+                                                                             
+                    unjudged += 1
+                    continue
                 if rep.axes.integrity != "pass":
                     detail = next((f.detail for f in rep.findings
                                    if f.severity == "fail"), rep.result)
@@ -105,6 +136,12 @@ def _chain_check(home: Path, store_path: Path) -> Check:
     if broken:
         return Check("chains", "fail", f"{len(broken)} stream failures: {broken[0]}",
                      "export the affected session and run `provelog verify`")
+    if unjudged:
+        return Check("chains", "skip",
+                     f"{checked - unjudged} stream(s) verified; {unjudged} could not be "
+                     f"judged because the verification backend is unavailable",
+                     "fix the backend first (see the backend check); the records "
+                     "themselves were not reported as broken")
     return Check("chains", "ok", f"{checked} streams verified")
 
 
@@ -222,6 +259,8 @@ def run(home: Path | None = None, *, offline: bool = False) -> Report:
     else:
         checks.append(Check("store", "ok",
                             f"Records directory is readable: {root}"))
+        backend = _backend_check()
+        checks.append(backend)
         checks.append(_chain_check(home, root))
 
     latest = _latest_stamp(root)
