@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS external_anchors (
 );
 CREATE INDEX IF NOT EXISTS external_anchors_by_stream
     ON external_anchors(stream_id, covers_up_to);
+-- Deliver-then-delete leaves no row, and the client cannot tell "not minted
+-- yet" (404, retry) from "already delivered, gone" (410, stop). A tombstone
+-- keeps only the id and when it died, for the same retention window.
+CREATE TABLE IF NOT EXISTS anchor_tombstones (
+    anchor_id  TEXT PRIMARY KEY,
+    deleted_at TEXT NOT NULL
+);
 """
 
 def _now() -> str:
@@ -126,26 +133,59 @@ class Storage:
     def delete_external_anchor(self, anchor_id: str) -> bool:
         """Delete ONE hosted anchor row by its primary key (the receipt was just
         delivered in the response body - the hosted copy is garbage). Returns
-        whether a row was removed."""
+        whether a row was removed.
+
+        The id itself is remembered as a tombstone so a client that kept
+        polling (crash between delivery and journal clearing) gets a definitive
+        410 instead of an endless 404.
+        """
         with self._lock:
             cur = self._db.execute("DELETE FROM external_anchors WHERE anchor_id=?",
                                    (anchor_id,))
+            if cur.rowcount > 0:
+                self._db.execute(
+                    "INSERT OR REPLACE INTO anchor_tombstones(anchor_id, deleted_at) "
+                    "VALUES (?,?)", (anchor_id, _now()))
             self._db.commit()
         return cur.rowcount > 0
+
+    def anchor_tombstone(self, anchor_id: str) -> str | None:
+        """When this anchor id was deleted, if it ever existed and died here."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT deleted_at FROM anchor_tombstones WHERE anchor_id=?",
+                (anchor_id,)).fetchone()
+        return None if row is None else str(row["deleted_at"])
+
+    def delete_tombstones_before(self, cutoff: str) -> int:
+        """Row-level TTL for tombstones; they are diagnostic, not evidence."""
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM anchor_tombstones WHERE deleted_at < ?", (cutoff,))
+            self._db.commit()
+        return cur.rowcount
 
     def delete_external_anchors_before(self, cutoff: str) -> tuple[int, str]:
         """Row-level TTL: remove hosted anchor rows created before `cutoff`.
         Returns (rows removed, oldest removed created_at). The receipt was
         delivered to the user at stamp time and verifies offline, so these
-        hosted copies are transit data, not evidence."""
+        hosted copies are transit data, not evidence.
+
+        Expired ids also become tombstones: a late poll then gets 410 ("this
+        existed and is gone") instead of 404 ("never heard of it").
+        """
         with self._lock:
             rows = self._db.execute(
-                "SELECT created_at FROM external_anchors WHERE created_at < ? "
-                "ORDER BY created_at ASC", (cutoff,)).fetchall()
+                "SELECT anchor_id, created_at FROM external_anchors "
+                "WHERE created_at < ? ORDER BY created_at ASC", (cutoff,)).fetchall()
             if not rows:
                 return 0, ""
             self._db.execute("DELETE FROM external_anchors WHERE created_at < ?",
                              (cutoff,))
+            now = _now()
+            self._db.executemany(
+                "INSERT OR REPLACE INTO anchor_tombstones(anchor_id, deleted_at) "
+                "VALUES (?,?)", [(row["anchor_id"], now) for row in rows])
             self._db.commit()
         return len(rows), rows[0]["created_at"]
 

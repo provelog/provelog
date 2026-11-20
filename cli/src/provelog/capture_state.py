@@ -119,6 +119,11 @@ def stalled_sources(now: float | None = None, min_age_s: float = 900.0,
             continue
         if actual_stat.st_mtime < now - active_within_s:
             continue
-        if source not in out and actual_stat.st_size > recorded and commit_at and now - commit_at >= min_age_s:
+        if (
+            source not in out
+            and actual_stat.st_size > recorded
+            and commit_at
+            and now - commit_at >= min_age_s
+        ):
             out.append(source)
     return out

@@ -20,13 +20,22 @@ Rules, all of them deliberate:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .netutil import client_for
+
+_log = logging.getLogger("provelog.anchoring")
+
+
+def _tag(value: Any) -> str:
+    """Short, non-reversible tag so a log line names a stream without naming it."""
+    return hashlib.sha256(str(value or "").encode()).hexdigest()[:8]
 
                                                                               
                                                         
@@ -40,6 +49,9 @@ ANCHOR_BACKOFF_S = 300.0
                                                                              
                                                                          
 PENDING_TTL_S = 600.0
+                                                                                
+                                                                        
+ORPHAN_GRACE_S = 60.0
 
                                                                                
                                                            
@@ -65,30 +77,51 @@ def _journal_path(store: Any) -> Path | None:
     return None if root is None else Path(root) / ".internal" / "pending_anchors.json"
 
 
-def _journal(store: Any) -> dict[str, str]:
-    """{stream_id: anchor_id} for claims whose receipt is still queued.
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _journal(store: Any) -> dict[str, dict[str, Any]]:
+    """{stream_id: {anchor_id, created_at}} for claims whose receipt is queued.
 
     A file, not a scan: with thousands of conversations, "ask every stream whether
     it has a pending receipt" is O(n^2) per pass (98 ms per call at 3,000 folders,
     measured), while this is one small read.
+
+    Entries carry their own creation time so an orphaned claim can be aged out
+    without the manifest: older builds wrote a bare anchor id, which is read as
+    ``created_at: None`` (age unknown) and treated as old.
     """
     path = _journal_path(store)
     if path is None or not path.is_file():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    rows: dict[str, dict[str, Any]] = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            anchor_id = str(value.get("anchor_id") or "")
+            created_at = value.get("created_at")
+        else:
+            anchor_id, created_at = str(value or ""), None
+        if anchor_id:
+            rows[str(key)] = {"anchor_id": anchor_id, "created_at": created_at}
+    return rows
 
 
-def _journal_set(store: Any, stream_id: str, anchor_id: str | None) -> None:
+def _journal_set(store: Any, stream_id: str, anchor_id: str | None,
+                 created_at: str | None = None) -> None:
     path = _journal_path(store)
     if path is None:
         return
     rows = _journal(store)
     if anchor_id:
-        rows[stream_id] = anchor_id
+        rows[stream_id] = {"anchor_id": str(anchor_id),
+                           "created_at": created_at or _now_iso()}
     else:
         rows.pop(stream_id, None)
     try:
@@ -117,9 +150,13 @@ def pickup_pending(store: Any, *, url: str | None = None,
     resolved = 0
     fetched = 0
     stamp = now if now is not None else time.time()
-    for stream_id, anchor_id in list(rows.items()):
+    for stream_id, entry in list(rows.items()):
+        anchor_id = str(entry.get("anchor_id") or "")
         if fetched >= limit:
             break
+        if not anchor_id:
+            _journal_set(store, stream_id, None)
+            continue
         if _pickup_at.get(stream_id, 0.0) > stamp:
             continue                                                         
         try:
@@ -143,12 +180,34 @@ def pickup_pending(store: Any, *, url: str | None = None,
             _journal_set(store, stream_id, None)
             _pickup_at.pop(stream_id, None)
         else:
-                                                                          
-                                                                              
-                                                                         
             pending = (store.pending_anchor(stream_id)
                        if hasattr(store, "pending_anchor") else None)
-            if pending and _age_seconds(pending.get("created_at")) >= PENDING_TTL_S:
+            if pending is None:
+                                                                             
+                                                                              
+                                                                               
+                                                                       
+                journal_age = _age_seconds(entry.get("created_at"))
+                if journal_age < ORPHAN_GRACE_S:
+                    _pickup_at[stream_id] = stamp + ANCHOR_EVERY_S
+                    continue
+                if hasattr(store, "fail_pending_anchor"):
+                    store.fail_pending_anchor(
+                        stream_id, anchor_id,
+                        "receipt no longer served; journal entry orphaned")
+                _journal_set(store, stream_id, None)
+                _pickup_at.pop(stream_id, None)
+                _log.info("anchor receipt for %s is orphaned; stopped polling %s",
+                          _tag(stream_id), _tag(anchor_id))
+                continue
+            age = _age_seconds(pending.get("created_at"))
+            if age == float("inf"):
+                                                                                
+                                                                                 
+                age = _age_seconds(entry.get("created_at"))
+            if age >= PENDING_TTL_S:
+                                                                           
+                                                                            
                 _journal_set(store, stream_id, None)
                 _pickup_at.pop(stream_id, None)
             else:
@@ -319,7 +378,8 @@ def maybe_anchor(store: Any, stream_id: str, *, url: str | None = None,
                                                          
         store.add_anchor(stream_id, out, covers_up_to=covers,
                          anchor_id=out.get("anchor_id"), pending=True)
-        _journal_set(store, stream_id, out.get("anchor_id"))
+        _journal_set(store, stream_id, out.get("anchor_id"),
+                     created_at=str(out.get("created_at") or "") or None)
         _pickup_at.pop(stream_id, None)                                           
         return out
     store.add_anchor(stream_id, out, covers_up_to=covers,

@@ -81,6 +81,8 @@ class RetentionScheduler:
             return 0
         cutoff = self._cutoff(self.external_anchor_days, ref=now)
         n, oldest = self.store.delete_external_anchors_before(cutoff)
+        if hasattr(self.store, "delete_tombstones_before"):
+            self.store.delete_tombstones_before(cutoff)
         if n:
             _log.info("external anchor TTL: removed %s hosted row(s) created before %s "
                       "(oldest %s); delivered receipts verify offline, unaffected)",

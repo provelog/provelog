@@ -30,6 +30,13 @@ from .platform_paths import app_config_dir
 COMMIT_EVERY_RECORDS = 300
 COMMIT_EVERY_S = 900
 _MEDIA = re.compile(r"<media\b[^>]*\bsrc=\"([^\"]+)\"[^>]*>", re.I)
+_MEDIA_TAG = re.compile(r"<media\b[^>]*?/>", re.I | re.S)
+_DELIVER_ASSETS = re.compile(r"<deliver-assets\b[^>]*>.*?</deliver-assets>", re.I | re.S)
+
+
+def _without_media_markup(text: str) -> str:
+    """Remove machine delivery markup after its paths have been extracted."""
+    return _MEDIA_TAG.sub("", _DELIVER_ASSETS.sub("", text)).strip()
 
 
 def _media_blocks(text: str, pending: list[tuple[dict[str, Any], Path]]) -> list[dict[str, Any]]:
@@ -252,8 +259,9 @@ def _ingest_session(db: Path, session: dict[str, Any], store: Any, key: Any,
         ms = message["created_at"]
         if message["role"] == "user":
             turn += 1
-            text = str(data.get("msg_content") or "").strip()
-            media = _media_blocks(text, pending_attachments)
+            raw = str(data.get("msg_content") or "").strip()
+            media = _media_blocks(raw, pending_attachments)
+            text = _without_media_markup(raw)
             if text or media:
                 emit("user_message", {
                     "content": ([{"type": "text", "text": text}] if text else []) + media,
@@ -269,10 +277,12 @@ def _ingest_session(db: Path, session: dict[str, Any], store: Any, key: Any,
         think = str(data.get("thinking_content") or "").strip()
         if think:
             blocks.append({"type": "thinking", "text": think})
-        text = str(data.get("msg_content") or "").strip()
+        raw = str(data.get("msg_content") or "").strip()
+        media = _media_blocks(raw, pending_attachments)
+        text = _without_media_markup(raw)
         if text:
             blocks.append({"type": "text", "text": text})
-        blocks.extend(_media_blocks(text, pending_attachments))
+        blocks.extend(media)
         if blocks:
             body: dict[str, Any] = {"id": message["msg_id"], "content": blocks,
                                     "turn": turn}

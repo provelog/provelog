@@ -39,10 +39,16 @@ def _warn_serve_defaults(args) -> None:
 
 def _cmd_serve(args) -> int:
     _require_server_extra("serve")
+    import logging
+
     import uvicorn
 
     from .app import create_app
 
+                                                                               
+                                                                         
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
     anchor, anchor_desc = _build_anchor(args)
     _warn_serve_defaults(args)
     app = create_app(args.db, anchor=anchor,
@@ -54,10 +60,20 @@ def _cmd_serve(args) -> int:
     import provelog.server.app as appmod
     appmod.app = app
     base = f"http://{args.host}:{args.port}"
-    print(t("serve.banner_title", base=base))
-    print(t("serve.banner_roots"))
-    print(t("serve.banner_verifier", base=base))
-    print(t("serve.banner_dev"))
+                                                                                
+                                                                               
+                                                                     
+    if args.anchor == "local":
+        print(t("serve.banner_title", base=base))
+        print(t("serve.banner_roots"))
+        print(t("serve.banner_verifier", base=base))
+        print(t("serve.banner_dev"))
+    else:
+        print(t("serve.banner_relay", base=base))
+        print(t("serve.banner_roots"))
+        print(t("serve.banner_verifier", base=base))
+        print(t("serve.banner_retention",
+                days=args.external_anchor_retention_days))
                                                                                      
                                                                                          
     sys.stdout.flush()

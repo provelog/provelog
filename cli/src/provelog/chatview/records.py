@@ -916,17 +916,23 @@ def _images_of(value: Any) -> list[dict[str, Any]]:
         if block.get("type") != "image":
             continue
         meta = block.get("attachment")
-        if not isinstance(meta, dict):
+        if isinstance(meta, dict):
+            digest = str(meta.get("attachmentId") or "").split(":", 1)[-1]
+            media = str(meta.get("mediaType") or "")
+            ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
+                   "image/webp": ".webp", "image/gif": ".gif",
+                   "image/avif": ".avif"}.get(media.lower(), "")
+            if not digest:
+                continue
+            out.append({"file": digest + ext, "name": str(meta.get("name") or ""),
+                        "width": meta.get("width"), "height": meta.get("height")})
             continue
-        digest = str(meta.get("attachmentId") or "").split(":", 1)[-1]
-        media = str(meta.get("mediaType") or "")
-        ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
-               "image/webp": ".webp", "image/gif": ".gif",
-               "image/avif": ".avif"}.get(media.lower(), "")
-        if not digest:
-            continue
-        out.append({"file": digest + ext, "name": str(meta.get("name") or ""),
-                    "width": meta.get("width"), "height": meta.get("height")})
+                                                                           
+                                                                             
+                           
+        url = str(block.get("url") or "")
+        if url.startswith(("https://", "http://")):
+            out.append({"url": url, "name": str(block.get("name") or "")})
     return out
 
 
@@ -1141,6 +1147,7 @@ def _record_msgs(records: list[dict[str, Any]]) -> tuple[list[MessageView], dict
         message = MessageView(role="assistant", ts=ts,
                               turn=payload.get("turn") if isinstance(payload.get("turn"), int) else None,
                               text="\n\n".join(texts),
+                              images=_images_of(payload.get("content")),
                               thinking="\n\n".join(thinking) or None,
                               tool_calls=tool_calls, model=model,
                               provider=provider, effort=effort, usage=usage)
@@ -1357,6 +1364,15 @@ def load(home: Path, session_id: str, verify_integrity: bool = True
             start_meta = ((record.get("payload") or {}).get("meta") or {})
             break
     messages, stats = _record_msgs(events)
+                                                                           
+                                                                        
+                       
+    retracted_turns = sorted({
+        int((record.get("payload") or {}).get("turn"))
+        for record in events
+        if record.get("action_type") == "retraction"
+        and isinstance((record.get("payload") or {}).get("turn"), int)
+    })
                                                                           
                                                                             
     turn_ends = (_turn_ends(events, stats["user_at"])
@@ -1366,7 +1382,8 @@ def load(home: Path, session_id: str, verify_integrity: bool = True
     def _public(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows = []
         for img in images:
-            ok = bool(attachments_dir and (attachments_dir / img["file"]).is_file())
+            ok = bool(img.get("url")) or bool(
+                attachments_dir and (attachments_dir / img.get("file", "")).is_file())
             rows.append({**img, "ok": ok})
         return rows
     stamp = _latest_stamp_for_stream(manifest, stream)
@@ -1431,6 +1448,7 @@ def load(home: Path, session_id: str, verify_integrity: bool = True
             "role": m.role,
             "ts": m.ts,
             "turn": m.turn,
+            "retracted": isinstance(m.turn, int) and m.turn in retracted_turns,
             "text": m.text,
             "thinking": m.thinking,
             "model": m.model,
@@ -1450,6 +1468,7 @@ def load(home: Path, session_id: str, verify_integrity: bool = True
             } for t in m.tool_calls],
         } for m in messages],
         "host_turns": manifest.get("host_turns") or {},
+        "retracted_turns": retracted_turns,
         "records": row["records"],
         "turns": sum(1 for m in messages if m.role == "user") or row["turns"],
         "tool_calls": row["tool_calls"] or sum(len(m.tool_calls) for m in messages),
@@ -1540,6 +1559,17 @@ def _trajectory_json(value: Any, limit: int = 8000) -> str:
     except (TypeError, ValueError):
         text = str(value)
     return text if len(text) <= limit else text[:limit] + "\n…"
+
+
+def _retraction_text(payload: dict[str, Any], turn: Any) -> str:
+    """One line for a retracted turn, using only what the host recorded."""
+    count = payload.get("turns")
+    parts: list[str] = []
+    if isinstance(count, int) and count > 0:
+        parts.append(f"{count} turn" + ("" if count == 1 else "s"))
+    if isinstance(turn, int):
+        parts.append(f"from turn {turn}")
+    return "user retracted" + ((" (" + ", ".join(parts) + ")") if parts else "")
 
 
 def _first_line(text: str) -> str:
@@ -1658,6 +1688,12 @@ def trajectory(home: Path, session_id: str,
             rows.append({"kind": "compaction", "turn": turn, "step": step,
                          "ts": ts, "ts_ms": ts_ms, "text": text,
                          "summary": _first_line(text) or "Compaction",
+                         "tokens": 0, "duration_ms": 0, "pending": False})
+        elif action == "retraction":
+            text = _retraction_text(payload, turn)
+            rows.append({"kind": "retraction", "turn": turn, "step": step,
+                         "ts": ts, "ts_ms": ts_ms, "text": text,
+                         "summary": _first_line(text) or "Retracted",
                          "tokens": 0, "duration_ms": 0, "pending": False})
                                                                          
                                                                    

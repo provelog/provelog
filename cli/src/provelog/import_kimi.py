@@ -20,6 +20,7 @@ only reads the main agent's log; sub-agent wire files stay out of v1.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -34,6 +35,87 @@ COMMIT_EVERY_RECORDS = 300
 COMMIT_EVERY_S = 900
 
 _EXIT = re.compile(r"Command failed with exit code:\s*(\d+)")
+
+                                                                              
+                                                                
+_BLOBREF = re.compile(r"^blobref:([\w.+-]+/[^;]+);([0-9a-fA-F]{64})$")
+
+                                                                   
+_USAGE = {"inputOther": "input", "output": "output",
+          "inputCacheRead": "cache_read", "inputCacheCreation": "cache_write"}
+
+
+def _usage(raw: Any) -> dict[str, Any] | None:
+    """One usage record mapped onto the viewer's canonical keys."""
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Any] = {}
+    for key, value in raw.items():
+        name = _USAGE.get(str(key))
+        if name and isinstance(value, (int, float)) and not isinstance(value, bool):
+            out[name] = value
+    return out or None
+
+
+def _blob_image(block: Any, blobs: Path) -> tuple[dict[str, Any], bytes] | None:
+    """Resolve one ``image_url`` blobref block to record block + bytes.
+
+    The bytes are the agent's own copy beside the wire; only a 64-hex name is
+    ever read, so a hostile transcript cannot point the importer elsewhere.
+    """
+    if not isinstance(block, dict):
+        return None
+    url = (block.get("image_url") or block.get("imageUrl")
+           or block.get("url"))
+    if isinstance(url, dict):
+        url = url.get("url")
+    if not isinstance(url, str):
+        return None
+    match = _BLOBREF.match(url)
+    if match is None:
+        return None
+    media, name = match.group(1), match.group(2).lower()
+    try:
+        data = (blobs / name).read_bytes()
+    except OSError:
+        return None
+    if not data:
+        return None
+    digest = hashlib.sha256(data).hexdigest()
+    return ({"type": "image", "attachment": {
+        "attachmentId": "sha256:" + digest, "mediaType": media,
+        "bytes": len(data), "name": f"tool-image-{digest[:12]}"}}, data)
+
+
+def _turns_meta(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per-turn {start, end, reason} for the page's stopped/failed labels.
+
+    Display metadata only: the signed records stay the source of truth. The
+    host numbers turns from zero, the page from one.
+    """
+    turns: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        turn_no = event.get("turnId")
+        if not isinstance(turn_no, int):
+            continue
+        row = turns.setdefault(str(turn_no + 1), {})
+        kind = event.get("type")
+        if kind == "agent.turn.started":
+            row["start"] = _ms(event.get("time"))
+        elif kind == "turn.ended":
+            row["end"] = _ms(event.get("time"))
+            reason = str(event.get("reason") or "")
+            if reason:
+                row["reason"] = reason
+        elif kind == "turn.cancel":
+            row.setdefault("reason", "cancelled")
+        elif kind == "agent.turn.ended":
+            outcome = str(event.get("outcome") or "")
+            if outcome and outcome != "done":
+                row.setdefault("reason", "cancelled" if outcome == "aborted" else outcome)
+    return turns
 
 
 def kimi_homes(path: str | os.PathLike[str] | None = None) -> list[Path]:
@@ -188,6 +270,13 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
     stream = stream or f"local-kimi-code-{_bare(session_id)}"
     folder, manifest = _session_state(store, session_id)
     state = store.session_capture(session_id)
+    turns_meta = _turns_meta(events)
+    if (folder is not None and turns_meta
+            and manifest.get("host_turns") != turns_meta):
+                                                                             
+                                           
+        store.set_session_fields(session_id, host_turns=turns_meta)
+        manifest["host_turns"] = turns_meta
 
     if not state and folder is not None and int(manifest.get("records") or 0) > 0:
         store.set_session_capture(session_id, host_seq=consumed)
@@ -238,26 +327,79 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
         records.append(rec)
         return rec
 
-    counts = {"tool_calls": 0, "tool_results": 0}
+    counts = {"tool_calls": 0, "tool_results": 0, "model_calls": 0}
     pending: list[dict[str, Any]] = []
     pending_ms = 0
+    pending_first = 0                                                          
+                                                                               
+                                                                             
+                                                                         
     pending_images: list[tuple[bytes, dict[str, Any]]] = []
-    assistant_seq = 0
     current_turn = 0
+    current_step = 0
+    step_model: dict[str, str] = {}
+    step_usage: dict[str, Any] | None = None
+    step_model_call = False
+    call_where: dict[str, tuple[int, int]] = {}
+    approvals: dict[str, dict[str, Any]] = {}                              
+    approval_for: dict[str, str] = {}                                     
+    blobs = path.parent / "blobs"
+                                                                               
+                                                                        
+    prompts = {str(event.get("promptId") or ""): event.get("turnId")
+               for event in events if event.get("type") == "turn.prompt"}
+
+    def number(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def place() -> dict[str, Any]:
+        order: dict[str, Any] = {}
+        if current_turn:
+            order["turn"] = current_turn
+        if current_step:
+            order["step"] = current_step
+        return order
 
     def flush() -> None:
-        nonlocal pending, pending_ms, assistant_seq
+        nonlocal pending, pending_ms, pending_first, step_model_call
         if not pending:
             return
-        assistant_seq += 1
-        emit("assistant_message", {
-            "id": f"kimi-{session_id}-{assistant_seq}",
-            "content": pending,
-        }, pending_ms or int(stamp * 1000))
+        when = pending_ms or int(stamp * 1000)
+        payload: dict[str, Any] = {
+            "id": f"kimi-{session_id}-a-{pending_first}",
+            "content": pending, **place(),
+        }
+        if step_model:
+            payload["provider"] = step_model.get("provider", "")
+            payload["model"] = step_model.get("model", "")
+            if step_model.get("effort"):
+                payload["reasoning_effort"] = step_model["effort"]
+        if step_usage:
+            payload["usage"] = step_usage
+        emit("assistant_message", payload, when)
+                                                                                
+                                                                         
+                                              
+        if not step_model_call and (step_model or step_usage):
+            model_call: dict[str, Any] = {
+                "provider": step_model.get("provider", ""),
+                "model": step_model.get("model", ""),
+                "status": "ok", "derived_from": "assistant_message"}
+            if step_usage:
+                model_call["usage"] = step_usage
+            if step_model.get("effort"):
+                model_call["reasoning_effort"] = step_model["effort"]
+            emit("model_call", model_call, when)
+            step_model_call = True
+            counts["model_calls"] += 1
         pending = []
         pending_ms = 0
+        pending_first = 0
 
-    for _, event in selected:
+    for index, event in selected:
         kind = event.get("type")
         if kind == "context.append_message":
             message = event.get("message") or {}
@@ -279,7 +421,8 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
                         image_blocks.append(block)
                     image_blocks.extend(refs)
                     if _person(origin):
-                        current_turn += 1
+                        mapped = number(prompts.get(str(message.get("id") or "")))
+                        current_turn = (mapped + 1) if mapped is not None else current_turn + 1
                         emit("user_message", {
                             "content": ([{"type": "text", "text": text}] if text else []) + image_blocks,
                             "id": str(message.get("id") or f"kimi-{session_id}-u-{current_turn}"),
@@ -288,17 +431,16 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
                     else:
                         emit("user_message", {
                             "content": ([{"type": "text", "text": text}] if text else []) + image_blocks,
-                            "id": str(message.get("id") or f"kimi-{session_id}-ctx-{current_turn}"),
+                            "id": str(message.get("id") or f"kimi-{session_id}-ctx-{index}"),
                             "origin": "context",
                             **({"turn": current_turn} if current_turn else {}),
                         }, ms)
             elif role == "assistant" and text:
                 flush()
-                assistant_seq += 1
                 emit("assistant_message", {
-                    "id": str(message.get("id") or f"kimi-{session_id}-a-{assistant_seq}"),
+                    "id": str(message.get("id") or f"kimi-{session_id}-a-{index}"),
                     "content": [{"type": "text", "text": text}],
-                    **({"turn": current_turn} if current_turn else {}),
+                    **place(),
                 }, ms)
             continue
 
@@ -316,6 +458,79 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
             flush()
             continue
 
+        if kind == "turn.prompt":
+            turn_no = number(event.get("turnId"))
+            if turn_no is not None:
+                current_turn = turn_no + 1
+            continue
+
+        if kind == "context.undone":
+                                                                                
+                                                                                
+                                             
+            taken_back = number(event.get("turns")) or 1
+            host_turn = number(event.get("fromTurnId"))
+            undone: dict[str, Any] = {"turns": taken_back, "reason": "user_undo",
+                                      "source": "context.undone"}
+            if host_turn is not None:
+                undone["host_turn_id"] = host_turn
+                undone["turn"] = host_turn + 1
+            emit("retraction", undone, _ms(event.get("time")))
+            continue
+
+        if kind == "llm.request":
+            step_model = {
+                "provider": str(event.get("provider") or ""),
+                "model": str(event.get("model") or event.get("modelAlias") or ""),
+                "effort": str(event.get("thinkingEffort") or ""),
+            }
+            continue
+
+        if kind == "usage.record":
+            step_usage = _usage(event.get("usage"))
+            continue
+
+        if kind == "interaction.request":
+                                                                            
+                                                                             
+            if str(event.get("kind") or "") != "approval":
+                continue
+            request = event.get("request") or {}
+            if not isinstance(request, dict):
+                request = {}
+            approval_id = str(event.get("id") or request.get("id") or "")
+            call_id = str(event.get("toolCallId") or request.get("toolCallId") or "")
+            if not approval_id or not call_id:
+                continue
+            display = request.get("display") if isinstance(request.get("display"), dict) else {}
+            entry: dict[str, Any] = {"requested_at_ms": _ms(event.get("time"))}
+            action = str(request.get("action") or display.get("summary") or "")
+            if action:
+                entry["action"] = action
+            tool_name = str(request.get("toolName") or "")
+            if tool_name:
+                entry["tool"] = tool_name
+            approvals[approval_id] = entry
+            approval_for[call_id] = approval_id
+            continue
+
+        if kind == "interaction.resolved":
+            entry = approvals.get(str(event.get("id") or ""))
+            response = event.get("response") if isinstance(event.get("response"), dict) else {}
+            decision = str(response.get("decision") or "")
+            if entry is not None and decision:
+                entry["decision"] = decision
+            continue
+
+        if kind == "permission.record_approval_result":
+            call_id = str(event.get("toolCallId") or "")
+            approval_id = approval_for.get(call_id)
+            result = event.get("result") if isinstance(event.get("result"), dict) else {}
+            decision = str(result.get("decision") or "")
+            if approval_id and decision:
+                approvals.setdefault(approval_id, {})["decision"] = decision
+            continue
+
         if kind != "context.append_loop_event":
             continue
         loop = event.get("event") or {}
@@ -324,14 +539,31 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
         loop_type = str(loop.get("type") or "")
         ms = _ms(event.get("time"))
         if loop_type == "step.begin":
+                                                                                
+                                                                
             flush()
-        elif loop_type == "content.part":
+            step_model, step_usage, step_model_call = {}, None, False
+        turn_no = number(loop.get("turnId"))
+        if turn_no is not None:
+                                                                          
+            current_turn = turn_no + 1
+        step_no = number(loop.get("step"))
+        if step_no is not None:
+            current_step = step_no
+        if loop_type == "step.begin":
+            continue
+        if loop_type == "content.part":
             part = loop.get("part") or {}
             if isinstance(part, dict):
-                text = str(part.get("text") or "")
+                kind_part = str(part.get("type") or "")
+                thinking = kind_part in ("think", "thinking", "reasoning")
+                text = str((part.get("think") or part.get("text") or "")
+                           if thinking else (part.get("text") or ""))
                 if text:
-                    block_type = "thinking" if part.get("type") == "thinking" else "text"
-                    pending.append({"type": block_type, "text": text})
+                    if not pending:
+                        pending_first = index
+                    pending.append({"type": "thinking" if thinking else "text",
+                                    "text": text})
                     pending_ms = ms or pending_ms
         elif loop_type == "step.end":
             flush()
@@ -347,23 +579,56 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
             payload: dict[str, Any] = {"tool": str(loop.get("name") or ""),
                                        "call_id": call_id}
             payload.update(fr._content("args", args if isinstance(args, dict) else {}))
-            if current_turn:
-                payload["turn"] = current_turn
+            payload.update(place())
+            approval = approvals.get(approval_for.get(call_id, ""))
+            if approval:
+                payload["approval"] = dict(approval)
+            call_where[call_id] = (current_turn, current_step)
             emit("tool_call", payload, ms)
             counts["tool_calls"] += 1
         elif loop_type == "tool.result":
             result = loop.get("result") or {}
             if not isinstance(result, dict):
                 result = {}
-            output = str(result.get("output") or "")
+            output = result.get("output")
+                                                                            
+                                                                            
+                                                                              
+            texts: list[str] = []
+            image_parts: list[Any] = []
+            if isinstance(output, list):
+                for part in output:
+                    if not isinstance(part, dict):
+                        continue
+                    if str(part.get("type") or "") == "text":
+                        value = str(part.get("text") or "")
+                        if value:
+                            texts.append(value)
+                    elif str(part.get("type") or "") in ("image_url", "input_image",
+                                                         "image", "file"):
+                        image_parts.append(part)
+            elif output is not None and str(output):
+                texts.append(str(output))
+            output_text = "\n".join(texts)
             is_error = bool(result.get("isError"))
             execution = {}
-            match = _EXIT.search(output)
+            match = _EXIT.search(output_text)
             if is_error and match:
                 execution["exit_code"] = int(match.group(1))
-            result_images = attachments_mod.inline_images(result, prefix="tool-image")
-            result_content = [{"type": "text", "text": output}] if output else []
-            for image_block, data, _name in result_images:
+            result_content = [{"type": "text", "text": output_text}] if output_text else []
+            for image_block, data, _name in attachments_mod.inline_images(
+                    image_parts, prefix="tool-image"):
+                pending_images.append((data, attachments_mod.entry_for(image_block["attachment"])))
+                result_content.append(image_block)
+            for part in image_parts:
+                resolved = _blob_image(part, blobs)
+                if resolved is None:
+                    continue
+                image_block, data = resolved
+                pending_images.append((data, attachments_mod.entry_for(image_block["attachment"])))
+                result_content.append(image_block)
+            for image_block, data, _name in attachments_mod.inline_images(result,
+                                                                          prefix="tool-image"):
                 pending_images.append((data, attachments_mod.entry_for(image_block["attachment"])))
                 result_content.append(image_block)
             result_content.extend(attachments_mod.image_refs(result, prefix="tool-image"))
@@ -372,8 +637,14 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
                        "is_error": is_error}
             if execution:
                 payload["execution"] = execution
-            if current_turn:
-                payload["turn"] = current_turn
+            where = call_where.get(str(loop.get("toolCallId") or ""))
+            if where is not None:
+                if where[0]:
+                    payload["turn"] = where[0]
+                if where[1]:
+                    payload["step"] = where[1]
+            else:
+                payload.update(place())
             emit("tool_result", payload, ms)
             counts["tool_results"] += 1
 
@@ -399,6 +670,10 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
         attachments_mod.save_pending(store, session_id, store.locate(session_id),
                                      pending_images)
         store.rebuild_md(session_id)
+        if folder is None and turns_meta:
+                                                                          
+                                                                       
+            store.set_session_fields(session_id, host_turns=turns_meta)
 
     capture = {
         "host_seq": consumed,
@@ -415,7 +690,8 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
     store.set_session_capture(session_id, **capture)
     return {"session_id": session_id, "stream": stream,
             "added": len(records), "tool_calls": counts["tool_calls"],
-            "tool_results": counts["tool_results"], "committed": committed}
+            "tool_results": counts["tool_results"],
+            "model_calls": counts["model_calls"], "committed": committed}
 
 
 def watch_once(store: Any, homes: list[Path] | None = None,

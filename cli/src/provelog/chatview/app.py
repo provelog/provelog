@@ -50,7 +50,7 @@ from . import agent_apps, export_dir, records, view_state
 _SECURITY_HEADERS = (
     (b"content-security-policy",
      b"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-     b"img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+     b"img-src 'self' data: https:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
      b"frame-ancestors 'none'"),
     (b"x-frame-options", b"DENY"),
     (b"x-robots-tag", b"noindex, nofollow"),

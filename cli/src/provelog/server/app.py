@@ -16,6 +16,7 @@ Design constraints enforced here:
 from __future__ import annotations
 
 import collections
+import hashlib
 import logging
 import pathlib
 
@@ -43,6 +44,36 @@ from .scheduler import (
 
                                                                                
 MAX_ANCHOR_GUARDS = 100_000
+
+_log_limit = logging.getLogger("provelog.anchor-limit")
+_log_miss = logging.getLogger("provelog.anchor-miss")
+
+
+def _tag(value: str) -> str:
+    """Short, non-reversible tag: the log names a stream/IP without naming it."""
+    return hashlib.sha256(str(value or "").encode()).hexdigest()[:8]
+
+
+                                                                             
+                                                                              
+                                    
+_MISS_WINDOW_S = 60.0
+_miss_last = 0.0
+_miss_count = 0
+
+
+def _note_anchor_miss(anchor_id: str) -> None:
+    global _miss_last, _miss_count
+    import time
+
+    _miss_count += 1
+    now = time.time()
+    if now - _miss_last < _MISS_WINDOW_S:
+        return
+    _miss_last = now
+    count, _miss_count = _miss_count, 0
+    _log_miss.warning("404 unknown anchor %s (%s miss(es) in the last window)",
+                      _tag(anchor_id), count)
 
 
 class CreateAccountIn(BaseModel):
@@ -279,6 +310,7 @@ def create_app(
         address = _client_address(request)
         app.state.flood.record(address)
         if app.state.flood.is_blocked(address):
+            _log_limit.warning("429 address blocked ip=%s", _tag(address))
             raise HTTPException(429, "this address is blocked for abusive volume; retry later",
                                 headers={"Retry-After": "600"})
         from ..keys import verify_signature
@@ -303,6 +335,8 @@ def create_app(
         if body.lane not in LANES:
             raise HTTPException(422, f"lane must be one of {', '.join(LANES)}")
         if not app.state.anchor_limiter.allow(stream_id):
+            _log_limit.warning("429 stream rate limit stream=%s ip=%s",
+                               _tag(stream_id), _tag(address))
             raise HTTPException(429, "anchor rate limit exceeded for this stream")
                                                                                   
                                                                                    
@@ -412,6 +446,14 @@ def create_app(
         the user-facing artifact, and this endpoint exists for receipt pickup."""
         found = store.get_external_anchor(anchor_id)
         if found is None:
+                                                                              
+                                                                                
+                                                                                 
+                                                                      
+            if hasattr(store, "anchor_tombstone") and store.anchor_tombstone(anchor_id):
+                raise HTTPException(410, "this receipt is gone: it was already delivered "
+                                        "or passed its retention window")
+            _note_anchor_miss(anchor_id)
             raise HTTPException(404, "no such anchor")
                                                                               
                                                                           

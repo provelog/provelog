@@ -281,6 +281,9 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 .trajrow .tk.assistant{color:#7c3aed;background:#ede9fe}
 .trajrow .tk.tool{color:#9a5b00;background:#fef3c7}
 .trajrow .tk.compaction{color:var(--cap);background:var(--l2)}
+.trajrow .tk.retraction{color:#b42318;background:#fee4e2}
+.retchip{margin-left:6px;font-size:10px;line-height:15px;padding:0 5px;
+  border-radius:3px;color:#b42318;background:#fee4e2;letter-spacing:.02em}
 .trajrow .tc{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   cursor:pointer}
 .trajrow .tc.tool{font-family:ui-monospace,SFMono-Regular,Monaco,monospace;
@@ -390,6 +393,18 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 .msg.user .filerow .fn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--tx)}
 .msg.user .filerow .fm{flex:none;color:var(--tx3)}
 .shotlink{display:inline-block;line-height:0;border-radius:8px}
+.remote-image{display:flex;flex-direction:column;align-items:flex-start;gap:5px;max-width:240px;
+  padding:8px;border:.5px solid var(--bd2);border-radius:10px;background:var(--l1);
+  text-align:left;cursor:pointer;color:var(--tx2);font:12px/1.6 var(--mono)}
+.remote-image .ri-frame{width:100%;aspect-ratio:16/9;border-radius:6px;background:var(--l2);
+  display:grid;place-items:center;overflow:hidden;color:var(--tx3);font:600 11px var(--mono)}
+.remote-image .ri-frame img{width:100%;height:100%;object-fit:contain;background:var(--bg)}
+.remote-image .ri-url{max-width:100%;overflow-wrap:anywhere;color:var(--tx3);
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.remote-image .ri-act{color:var(--accent);font-weight:600}
+.remote-image.loading{opacity:.65;cursor:progress}
+.remote-image.failed .ri-act{color:var(--bad)}
+.remote-image.loaded{cursor:default}
 .shot{max-width:240px;max-height:240px;border-radius:12px;background:var(--l2);
   display:block;object-fit:contain;cursor:zoom-in;box-shadow:0 0 0 .5px var(--bd2)}
 .shot.broken{display:none}
@@ -672,11 +687,12 @@ body.lb-open{overflow:hidden}
   color:var(--cap)}
 .linkbtn.danger{color:var(--err-text)}
 .linkbtn:hover{color:var(--tx2)}
-.filelink{display:inline-flex;align-items:center;gap:5px;max-width:100%;margin:0 1px;
-  padding:2px 7px;border:.5px solid var(--bd2);border-radius:6px;background:var(--l2);
-  font-family:ui-monospace,SFMono-Regular,Monaco,monospace;font-size:12px;
-  color:var(--tx2);cursor:pointer;vertical-align:baseline}
-.filelink:hover{background:var(--hover);color:var(--tx);border-color:var(--bd)}
+.filelink{display:inline-flex;align-items:center;gap:4px;max-width:100%;margin:0 1px;
+  padding:0 0 1px;border:0;border-bottom:1px dotted var(--bd3);border-radius:0;
+  background:none;font-family:ui-monospace,SFMono-Regular,Monaco,monospace;font-size:12px;
+  line-height:1.6;color:var(--accent);cursor:pointer;vertical-align:baseline;
+  white-space:normal;overflow-wrap:anywhere;text-align:left}
+.filelink:hover{color:var(--accent);border-bottom-color:var(--accent);background:none}
 .filelink .fi{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke-width:1.3}
 .stampline{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:20px;
   color:var(--cap);padding:1px 0}
@@ -1105,7 +1121,9 @@ const STR = {
     itemHint: "双击打开证据文件夹",
     imageMissing: "图片未保存（引用还在，文件已不在）",
     imageBroken: "图片加载失败",
-    fileOpened: "已打开文件",
+    loadRemoteImage: "加载远程图片",
+    remoteImageFailed: "加载失败，仅保留 URL",
+    fileOpened: "已在文件管理器中显示",
     fileOpenFail: "打不开这个文件",
     toDark: "切换到深色",
     more: "更多",
@@ -1147,7 +1165,8 @@ const STR = {
     trajTurn: "Turn {n}", trajStep: "Step {n}", trajTurns: "{n} 轮",
     trajCollapse: "收起轮次", trajExpand: "展开轮次",
     trajUser: "用户", trajAssistant: "助手", trajTool: "工具",
-    trajCompaction: "压缩", trajEarlier: "加载更早的轨迹",
+    trajCompaction: "压缩", trajRetraction: "撤回",
+    retractedChip: "已撤回", trajEarlier: "加载更早的轨迹",
     laterMessages: "加载更多 {n} 条消息",
     trajEvent: "事件", trajContent: "内容", trajTokens: "Token", trajTime: "时间",
     trajSearch: "搜索轨迹", trajNoMatch: "没有匹配的轨迹记录。",
@@ -1241,7 +1260,9 @@ const STR = {
     itemHint: "Double-click: open evidence folder",
     imageMissing: "Image not saved (reference kept, file is gone)",
     imageBroken: "Image failed to load",
-    fileOpened: "Opened file",
+    loadRemoteImage: "Load remote image",
+    remoteImageFailed: "Load failed; URL kept",
+    fileOpened: "Revealed in file manager",
     fileOpenFail: "Could not open this file",
     toDark: "Switch to dark",
     more: "More",
@@ -1283,7 +1304,8 @@ const STR = {
     trajTurn: "Turn {n}", trajStep: "Step {n}", trajTurns: "{n} turns",
     trajCollapse: "Collapse turns", trajExpand: "Expand turns",
     trajUser: "User", trajAssistant: "Assistant", trajTool: "Tool",
-    trajCompaction: "Compaction", trajEarlier: "Load earlier trajectory",
+    trajCompaction: "Compaction", trajRetraction: "Retracted",
+    retractedChip: "Retracted", trajEarlier: "Load earlier trajectory",
     laterMessages: "Load {n} more messages",
     trajEvent: "Event", trajContent: "Content", trajTokens: "Tokens", trajTime: "Time",
     trajSearch: "Search trajectory", trajNoMatch: "No matching trajectory records.",
@@ -1393,12 +1415,7 @@ function md(src, opts) {
     t = t
       .replace(/(^|[^!])\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, prefix, label, path) => {
         const clean = path.replace(/^<|>$/g, "").replace(/&amp;/g, "&");
-        if (isLocalPath(clean)) {
-          return prefix + '<button type="button" class="filelink" data-file="' + esc(clean)
-            + '"><svg class="fi" viewBox="0 0 16 16" aria-hidden="true">'
-            + '<path d="M4 2.2h5.2l2.8 2.8v8.8H4z"/><path d="M9.2 2.2V5h2.8"/></svg>'
-            + label + '</button>';
-        }
+        if (isLocalPath(clean)) return prefix + fileLinkHTML(clean, label);
         const href = safeHref(clean);
         if (!href) return whole;
         return prefix + '<a href="' + esc(href) + '" target="_blank" rel="noreferrer">'
@@ -1406,7 +1423,11 @@ function md(src, opts) {
       })
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-    return t.replace(/\u0000(\d+)\u0000/g, (_, index) => "<code>" + code[Number(index)] + "</code>");
+    return t.replace(/\u0000(\d+)\u0000/g, (_, index) => {
+      const value = code[Number(index)];
+      const clean = value.replace(/&amp;/g, "&");
+      return isClickableLocalPath(clean) ? fileLinkHTML(clean, clean) : "<code>" + value + "</code>";
+    });
   };
   while (i < lines.length) {
     const L = lines[i];
@@ -1577,6 +1598,18 @@ function isLocalPath(value) {
   return s.startsWith("/") || /^[A-Za-z]:[\\/]/.test(s)
     || s.startsWith("./") || s.startsWith("../")
     || /\.[A-Za-z0-9]{1,8}$/.test(s);
+}
+function isClickableLocalPath(value) {
+  const s = String(value || "").trim();
+  if (!s || s.startsWith("#")) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s) || s.startsWith("//")) return false;
+  return s.startsWith("/") || /^[A-Za-z]:[\\/]/.test(s) || s.startsWith("~/");
+}
+function fileLinkHTML(path, label) {
+  return '<button type="button" class="filelink" data-file="' + esc(path)
+    + '"><svg class="fi" viewBox="0 0 16 16" aria-hidden="true">'
+    + '<path d="M4 2.2h5.2l2.8 2.8v8.8H4z"/><path d="M9.2 2.2V5h2.8"/></svg>'
+    + esc(label || path) + '</button>';
 }
 function sessionTitle(s) {
   return (s && (s.title || s.title_hint)) || T("untitled");
@@ -2231,6 +2264,7 @@ function trajKindLabel(kind) {
   if (kind === "user") return T("trajUser");
   if (kind === "assistant") return T("trajAssistant");
   if (kind === "compaction") return T("trajCompaction");
+  if (kind === "retraction") return T("trajRetraction");
   return T("trajTool");
 }
 
@@ -2641,6 +2675,13 @@ function imgTag(sid, img, extra, eager, variant) {
   if (!img || !img.ok) {
     return '<span class="imgmiss">' + esc(T("imageMissing")) + "</span>";
   }
+  if (img.url) {
+    return '<button type="button" class="remote-image" data-remote-img="' + esc(img.url)
+      + '" data-remote-name="' + esc(img.name || "") + '">'
+      + '<span class="ri-frame" aria-hidden="true">URL</span>'
+      + '<span class="ri-url">' + esc(img.url) + "</span>"
+      + '<span class="ri-act">' + esc(T("loadRemoteImage")) + "</span></button>";
+  }
   const src = BASE + "api/records/session/" + encodeURIComponent(sid)
     + "/attachment/" + encodeURIComponent(img.file);
   let dw = Number(img.width) || 0;
@@ -2650,13 +2691,38 @@ function imgTag(sid, img, extra, eager, variant) {
     const fit = fitImage(dw, dh);
     dw = fit.w; dh = fit.h;
   }
-  return '<a class="shotlink" href="' + src + '" target="_blank" rel="noreferrer" title="'
+  return '<a class="shotlink" href="' + esc(img.url || src) + '" target="_blank" rel="noreferrer" title="'
     + esc(img.name || "") + '"><img class="shot' + (extra ? " " + extra : "")
     + (variant ? " " + variant : "")
-    + '" loading="' + (eager ? "eager" : "lazy") + '"'
+    + '" loading="' + (eager ? "eager" : "lazy") + '" referrerpolicy="no-referrer"'
     + (dw && dh ? ' width="' + dw + '" height="' + dh + '"' : "")
-    + ' src="' + src + '" alt="'
+    + ' src="' + esc(src) + '" alt="'
     + esc(img.name || "") + '" data-fallback="' + esc(T("imageBroken")) + '"></a>';
+}
+function loadRemoteImage(card) {
+  if (!card || card.classList.contains("loading") || card.classList.contains("loaded")) return;
+  const url = card.dataset.remoteImg || "";
+  if (!/^https:\/\//i.test(url)) return;
+  card.classList.add("loading");
+  const act = card.querySelector(".ri-act");
+  if (act) act.textContent = "…";
+  const img = new Image();
+  img.className = "shot";
+  img.alt = card.dataset.remoteName || "remote image";
+  img.referrerPolicy = "no-referrer";
+  img.onload = () => {
+    card.classList.remove("loading");
+    card.classList.add("loaded");
+    const frame = card.querySelector(".ri-frame");
+    if (frame) frame.replaceChildren(img);
+    if (act) act.textContent = "";
+  };
+  img.onerror = () => {
+    card.classList.remove("loading");
+    card.classList.add("failed");
+    if (act) act.textContent = T("remoteImageFailed");
+  };
+  img.src = url;
 }
 let lightboxReturn = null;
 function openLightbox(src, alt) {
@@ -2773,10 +2839,13 @@ function docHeadHTML(s) {
     + esc(who) + "</span>" + (s.turns ? "<span>" + esc(fill(T("turnsTalk"), { n: s.turns })) + "</span>" : "")
     + "</div>" + (sum ? '<div class="docsum">' + sum + "</div>" : "") + "</header>";
 }
-function turnOpenHTML(s, marks, n) {
+function turnOpenHTML(s, marks, n, ref) {
   const known = !!marks && n <= marks.length;
   const mark = known ? marks[n - 1] : null;
   const chip = known ? sealChip(!!mark, markWord(s, mark)) : "";
+  const gone = Array.isArray(s.retracted_turns)
+    && s.retracted_turns.includes(typeof ref === "number" ? ref : n)
+    ? '<span class="retchip">' + esc(T("retractedChip")) + "</span>" : "";
   const no = esc(fill(T("turnNo"), { n: n }));
   return '<section class="turnsec" id="turn-' + n + '" data-turn="' + n + '"'
     + (known ? ' data-st="' + (mark ? "ok" : "none") + '"' : "") + ">"
@@ -2784,6 +2853,7 @@ function turnOpenHTML(s, marks, n) {
         + chip + '<span class="tno">' + no + "</span></button>" : "")
     + '<div class="twho"><b>' + esc(T("you")) + "</b><span>" + no + "</span>"
     + (known ? '<button type="button" class="tinl" data-evopen>' + chip + "</button>" : "")
+    + gone
     + '<span class="line"></span></div>';
 }
 
@@ -3054,7 +3124,7 @@ function aiGroup(group, agent) {
   let answerIndex = -1;
   for (let i = items.length - 1; i >= 0; i--) {
     const m = items[i];
-    if ((m.text || "").trim()) {
+    if ((m.text || "").trim() || (m.images || []).length) {
       answerIndex = i;
       break;
     }
@@ -3095,6 +3165,12 @@ function aiGroup(group, agent) {
     }
   }
   if (answer) body += md(answer.text);
+  if (answer && (answer.images || []).length) {
+    const variant = answer.images.length > 1 ? "tile" : "single";
+    body += '<div class="imgs">'
+      + answer.images.map((img) => imgTag(group.sid, img, "", true, variant)).join("")
+      + "</div>";
+  }
   body += wrapUpCard(wrapUps, group.nextUser || "");
   return '<div class="msg ai"><div class="body">' + body + "</div>"
     + (answer ? msgActions(answer.text, answer.ts) : "") + "</div>";
@@ -3166,7 +3242,8 @@ function renderMessages(s, preserveScroll) {
       flush(m.text || "");
       closeTurn();
       turnNo++;
-      parts.push(turnOpenHTML(s, marks, turnNo));
+      parts.push(turnOpenHTML(s, marks, turnNo,
+        typeof m.turn === "number" ? m.turn : turnNo));
       turnOpen = true;
       lastUserTs = m.ts || "";
       lastUserTurn = typeof m.turn === "number" ? m.turn : null;
@@ -3783,6 +3860,11 @@ async function boot() {
       for (const el of document.querySelectorAll("[data-proc-body]")) {
         if (el.dataset.procBody === key) el.hidden = !open;
       }
+      return;
+    }
+    const remote = e.target.closest && e.target.closest("[data-remote-img]");
+    if (remote) {
+      loadRemoteImage(remote);
       return;
     }
     const shot = e.target.closest && e.target.closest("a.shotlink");

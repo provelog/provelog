@@ -164,6 +164,9 @@ STRINGS: dict[str, str] = {
         "serve.banner_verifier": "  Test verifier: {base}/verify",
         "serve.banner_dev": ("For development and testing only. Its stamps are "
                              "local and carry no third-party standing."),
+        "serve.banner_relay": ("ProveLog stamp relay, running at {base}"),
+        "serve.banner_retention": ("  Queued receipts are kept {days} days, then discarded; "
+                                   "the stamp itself verifies offline."),
 }
 
 
