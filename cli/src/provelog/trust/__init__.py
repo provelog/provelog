@@ -14,13 +14,14 @@ from typing import Any
 
                                                                    
 _ROOTS = {
-    "freetsa.org": "freetsa_cacert.pem",
+    "freetsa.org": ("freetsa_cacert.pem",),
                                                                            
+                                                                         
+                                                                               
                                                                             
-                                                                            
-                                                                             
-                                                       
-    "timestamp.sectigo.com": "sectigo_tsa_cacert.pem",
+                                              
+    "timestamp.sectigo.com": ("sectigo_r46_cacert.pem",
+                              "sectigo_tsa_cacert.pem"),
 }
 
 _DIR = Path(__file__).parent
@@ -59,18 +60,34 @@ def registered_hosts() -> list[str]:
     return list(_EXTRA_ROOTS) + list(_ROOTS)
 
 
-def root_for_tsa(tsa_url: str | None):
-    """Return a cryptography x509 Certificate for the TSA, or None if no trusted root is known.
-    Operator-registered roots take precedence over the bundled set."""
+def roots_for_tsa(tsa_url: str | None) -> list[Any]:
+    """Every trusted root for this TSA, in preference order.
+
+    Multiple roots let us pin both Sectigo R46 and the USERTrust cross-sign:
+    a token that chains to either verifies, and a chain change does not
+    invalidate evidence already issued.
+    """
     if not tsa_url:
-        return None
+        return []
     from cryptography import x509
     for host, cert in _EXTRA_ROOTS.items():
         if host in tsa_url:
-            return cert
-    for host, fname in _ROOTS.items():
+            return [cert]
+    roots: list[Any] = []
+    for host, fnames in _ROOTS.items():
         if host in tsa_url:
-            path = _DIR / fname
-            if path.exists():
-                return x509.load_pem_x509_certificate(path.read_bytes())
-    return None
+            for fname in fnames:
+                path = _DIR / fname
+                if path.exists():
+                    roots.append(x509.load_pem_x509_certificate(path.read_bytes()))
+    return roots
+
+
+def root_for_tsa(tsa_url: str | None):
+    """Return the preferred cryptography x509 Certificate, or None.
+
+    Kept for callers that only need one anchor; verification uses
+    roots_for_tsa() so either pinned Sectigo root can close the chain.
+    """
+    roots = roots_for_tsa(tsa_url)
+    return roots[0] if roots else None

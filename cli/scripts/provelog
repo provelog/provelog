@@ -1,0 +1,10 @@
+#!/bin/sh
+# ProveLog launcher: find the interpreter that owns this script directory.
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -x "$here/python" ]; then
+    exec "$here/python" -m provelog "$@"
+fi
+if [ -x "$here/python3" ]; then
+    exec "$here/python3" -m provelog "$@"
+fi
+exec python3 -m provelog "$@"

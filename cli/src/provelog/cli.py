@@ -21,21 +21,31 @@ warnings.filterwarnings("ignore", module=r"starlette\.testclient")
 
 
 def _require_server_extra(command: str, modules: tuple[str, ...] = ("fastapi",
-                                                                    "uvicorn")) -> None:
-    """Fail with a one-line fix when a runtime module is missing.
+                                                                    "uvicorn",
+                                                                    "pydantic")) -> None:
+    """Fail with an actionable line when the optional web stack is unusable.
 
     Core installs support recording, verification, export and anchoring; the
-    hosted stamping service and the chat viewer need fastapi/uvicorn, which
-    ship in the normal install. An ImportError
-    from `import fastapi` would be a traceback naming a module the user never
-    chose - this turns it into the install line that fixes it. `modules`
-    names what THIS command actually imports."""
-    missing = []
+    chat viewer and relay need fastapi/uvicorn/pydantic. A missing package is
+    fixed with pip; a DLL blocked by host policy is not. Keep those two cases
+    distinct instead of telling a user to reinstall a package that is present.
+    """
+    missing: list[str] = []
+    blocked: list[str] = []
     for name in modules:
         try:
             __import__(name)
-        except ImportError:
-            missing.append(name)
+        except ModuleNotFoundError as exc:
+            missing.append(str(exc.name or name))
+        except (ImportError, OSError) as exc:
+            blocked.append(f"{name}: {exc}")
+    if blocked:
+        print(f"{command} is unavailable on this machine: the web stack could not load.",
+              file=sys.stderr)
+        print("Export and verify are unaffected. Use `provelog export` and open "
+              "verify-offline.html from the pack.", file=sys.stderr)
+        print("Details: " + "; ".join(blocked), file=sys.stderr)
+        raise SystemExit(2) from None
     if not missing:
         return
     from .strings import t
@@ -123,7 +133,10 @@ def _cmd_setup(args) -> int:
     from . import pause as pause_state
 
     running = onboarding.watch_process_running()
-    if onboarding.watch_agent_installed() and running is not False:
+                                                                           
+                                                                              
+                                                                            
+    if onboarding.watch_agent_installed() and running is True:
         print("ProveLog is already set up.")
         print()
         print("Run provelog status to check status.")
@@ -160,7 +173,10 @@ def _cmd_uninstall(args) -> int:
     result = onboarding.uninstall()
     watch = result.get("watch")
     viewer = result.get("viewer")
+    stopped = result.get("stopped")
     errors = result.get("errors") or []
+    if stopped:
+        print("Collector process stopped.")
     if watch:
         print(t("setup.uninstall_collector", path=watch))
     if viewer:
@@ -252,6 +268,18 @@ def _cmd_status(args) -> int:
             print("Import errors:      none")
     except (OSError, ValueError, TypeError):
         print("Import errors:      none")
+    try:
+        from . import anchoring
+        err = anchoring.last_anchor_error()
+        if err:
+            age_min = max(0, int((time.time() - float(err.get("at") or 0)) / 60))
+            detail = str(err.get("detail") or "").replace("\n", " ")[:100]
+            print(f"Anchor:             refused ({err.get('status') or 409}) "
+                  f"{age_min} min ago — {detail}")
+        else:
+            print("Anchor:             ok")
+    except (OSError, ValueError, TypeError, ImportError):
+        print("Anchor:             unknown")
 
     if not total:
         print()

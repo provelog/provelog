@@ -5,3 +5,6 @@ include NOTICE.md
 graft web
 
 recursive-include src/provelog/web *.html
+
+include scripts/provelog
+include scripts/provelog.cmd

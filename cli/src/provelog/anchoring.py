@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import secrets
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +45,9 @@ ANCHOR_TIMEOUT_S = 4.0
                                                                                 
                                                                                  
 ANCHOR_BACKOFF_S = 300.0
+                                                                              
+                                                                   
+ANCHOR_CONFLICT_BACKOFF_S = 600.0
                                                                            
                                                                             
                                                                              
@@ -58,6 +62,9 @@ ORPHAN_GRACE_S = 60.0
 _last_attempt: dict[str, float] = {}
 _down_until: float = 0.0
 _last_429: float = 0.0
+                                                                             
+                                         
+_conflict_until: dict[str, float] = {}
 _upgrade_required: dict[str, Any] | None = None
 _upgrade_noticed = False
                                                                               
@@ -65,6 +72,99 @@ _upgrade_noticed = False
                                                                            
                                                                         
 _pickup_at: dict[str, float] = {}
+
+
+def anchor_error_path() -> Path:
+    return Path.home() / ".provelog" / "anchor-errors.json"
+
+
+def last_anchor_error() -> dict[str, Any] | None:
+    """The last 409 the relay returned, or None. Never raises on a bad file."""
+    try:
+        data = json.loads(anchor_error_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _record_anchor_error(stream_id: str, detail: str) -> None:
+    data = {"at": time.time(), "stream_id": stream_id, "status": 409,
+            "detail": detail}
+    path = anchor_error_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _clear_anchor_error(stream_id: str) -> None:
+    """A successful claim clears only its own last error."""
+    data = last_anchor_error()
+    if data is not None and str(data.get("stream_id") or "") not in ("", stream_id):
+        return
+    try:
+        anchor_error_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _response_detail(resp: Any) -> str:
+    try:
+        body = resp.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        detail = body.get("detail") or body.get("message")
+        if detail:
+            return str(detail)
+    return str(getattr(resp, "text", "") or "").strip()[:500]
+
+
+def _aliases_path() -> Path:
+    return Path.home() / ".provelog" / "stream-aliases.json"
+
+
+def _aliases() -> dict[str, str]:
+    try:
+        data = json.loads(_aliases_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if v}
+
+
+def _alias_for(stream_id: str) -> str | None:
+    return _aliases().get(stream_id)
+
+
+def _set_alias(local: str, relay: str) -> None:
+    rows = _aliases()
+    rows[local] = relay
+    path = _aliases_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _fresh_local_stream(store: Any, stream_id: str) -> bool:
+    """True when this local stream has never held an anchor.
+
+    Only a fresh local chain may open a new relay stream on 409. If this store
+    already has anchors, a 409 means the relay and this device disagree about a
+    history we are keeping; silently forking it would hide that.
+    """
+    try:
+        if hasattr(store, "anchors_for_stream") and store.anchors_for_stream(stream_id):
+            return False
+        if hasattr(store, "pending_anchor") and store.pending_anchor(stream_id):
+            return False
+    except Exception:
+        return False
+    return True
 
 
 def upgrade_info() -> dict[str, Any] | None:
@@ -172,6 +272,7 @@ def pickup_pending(store: Any, *, url: str | None = None,
                 continue
             _journal_set(store, stream_id, None)
             _pickup_at.pop(stream_id, None)
+            _clear_anchor_error(stream_id)
             resolved += 1
         elif resp.status_code == 410:
                                                                             
@@ -258,6 +359,7 @@ def pickup(store: Any, stream_id: str, *, url: str | None = None,
                                                                                
                                                                           
         return False
+    _clear_anchor_error(stream_id)
     try:
         body = resp.json()
     except ValueError:
@@ -270,7 +372,14 @@ def maybe_anchor(store: Any, stream_id: str, *, url: str | None = None,
                  key: Any | None = None, now: float | None = None,
                  timeout: float = ANCHOR_TIMEOUT_S,
                  force: bool = False, lane: str = "live") -> dict[str, Any] | None:
-    """Push one claim for this stream if it grew; pick up a finished receipt first."""
+    """Push one claim for this stream if it grew; pick up a finished receipt first.
+
+    A 409 from the relay means its history for this stream disagrees with ours.
+    The local chain is never dropped: we record the refusal for status/doctor,
+    back off, and -- only for a fresh local stream (the reinstall case) -- open
+    a new relay stream and retry once. A store that already has anchors keeps
+    its history; a conflict there is surfaced, not silently forked.
+    """
     if not hasattr(store, "anchor_leaves"):
         return None
     global _down_until, _upgrade_required, _upgrade_noticed
@@ -279,6 +388,8 @@ def maybe_anchor(store: Any, stream_id: str, *, url: str | None = None,
     if _upgrade_required is not None:
         return None
     if stamp_now < _down_until:
+        return None
+    if stamp_now < _conflict_until.get(stream_id, 0.0):
         return None
     url = (url or endpoint()).rstrip("/")
 
@@ -323,24 +434,59 @@ def maybe_anchor(store: Any, stream_id: str, *, url: str | None = None,
     root = merkle_root(leaves)
     signing_key = key or _device_key()
     covers = len(leaves)
-    payload = {
-        "stream_id": stream_id,
-        "merkle_root": root,
-        "covers_up_to": covers,
-        "device_pubkey": signing_key.public_key_hex(),
-        "device_sig": signing_key.sign(
-            f"{stream_id}||{root}||{covers}||{lane}".encode()),
-        "lane": lane,
-    }
+    local_stream = stream_id
+    alias = _alias_for(local_stream)
+    fresh = _fresh_local_stream(store, local_stream)
+
+    def payload_for(relay_stream: str) -> dict[str, Any]:
+        return {
+            "stream_id": relay_stream,
+            "merkle_root": root,
+            "covers_up_to": covers,
+            "device_pubkey": signing_key.public_key_hex(),
+            "device_sig": signing_key.sign(
+                f"{relay_stream}||{root}||{covers}||{lane}".encode()),
+            "lane": lane,
+        }
+
+    def send(relay_stream: str):
+        with client_for(url, timeout=timeout) as client:
+            return client.post(f"{url}/v1/anchors", json=payload_for(relay_stream),
+                               headers={"X-ProveLog-Version": __version__})
+
     from . import __version__
 
+    relay_stream = alias or local_stream
     try:
-        with client_for(url, timeout=timeout) as client:
-            resp = client.post(f"{url}/v1/anchors", json=payload,
-                               headers={"X-ProveLog-Version": __version__})
+        resp = send(relay_stream)
     except httpx.HTTPError:
         _down_until = stamp_now + ANCHOR_BACKOFF_S
         return None
+
+    if resp.status_code == 409:
+        detail = _response_detail(resp)
+        _record_anchor_error(local_stream, detail)
+        if alias is None and fresh:
+            new_stream = f"{relay_stream}-{secrets.token_hex(3)}"
+            _set_alias(local_stream, new_stream)
+            relay_stream = new_stream
+            try:
+                resp = send(relay_stream)
+            except httpx.HTTPError:
+                _down_until = stamp_now + ANCHOR_BACKOFF_S
+                return None
+            if resp.status_code == 409:
+                _record_anchor_error(local_stream, _response_detail(resp))
+                _conflict_until[local_stream] = stamp_now + ANCHOR_CONFLICT_BACKOFF_S
+                _log.warning("anchor conflict for %s on a new stream; backing off",
+                             _tag(local_stream))
+                return None
+        else:
+            _conflict_until[local_stream] = stamp_now + ANCHOR_CONFLICT_BACKOFF_S
+            _log.warning("anchor conflict for %s; backing off (%s)",
+                         _tag(local_stream), detail[:160])
+            return None
+
     if resp.status_code == 426:
                                                                              
                                                                                 
@@ -373,15 +519,16 @@ def maybe_anchor(store: Any, stream_id: str, *, url: str | None = None,
         return None
     if not isinstance(out, dict):
         return None
+    _clear_anchor_error(local_stream)
     if out.get("status") == "queued":
                                                                               
                                                          
-        store.add_anchor(stream_id, out, covers_up_to=covers,
+        store.add_anchor(local_stream, out, covers_up_to=covers,
                          anchor_id=out.get("anchor_id"), pending=True)
-        _journal_set(store, stream_id, out.get("anchor_id"),
+        _journal_set(store, local_stream, out.get("anchor_id"),
                      created_at=str(out.get("created_at") or "") or None)
-        _pickup_at.pop(stream_id, None)                                           
+        _pickup_at.pop(local_stream, None)                                           
         return out
-    store.add_anchor(stream_id, out, covers_up_to=covers,
+    store.add_anchor(local_stream, out, covers_up_to=covers,
                      anchor_id=out.get("anchor_id"))
     return out

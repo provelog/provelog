@@ -1198,96 +1198,93 @@ def _verify_anchor_receipt(receipt: dict[str, Any], rep: Report, seq: Any) -> st
                 f"time {receipt.get('gen_time')} is self-asserted and not externally provable")
         return "untrusted"
     if kind == "rfc3161":
+        import base64
+        import hashlib
+
+        from ..trust import roots_for_tsa
+        from ..tsa_backend import BackendUnavailable, TokenError, decode, verify_token
+
         try:
-            import base64
-            import hashlib
-
-            try:
-                from rfc3161_client import TimestampRequestBuilder  # noqa: F401  (staleness probe)
-
-                from ..tsa_der import decode_timestamp_response
-            except ModuleNotFoundError:
-                                                                                          
-                                                                                         
-                rep.add("fail", "rfc3161_support_missing",
-                        f"anchor {seq}: this proof carries an RFC 3161 trusted timestamp but the "
-                        f"verifier cannot decode it. Reinstall to get trusted-time support: "
-                        f"uv tool install --reinstall provelog (or pip install -U 'provelog').")
-                return "fail"
-            except (ImportError, OSError) as e:
-                                                                                   
-                                                                              
-                rep.add("fail", "verification_backend_unavailable",
-                        f"anchor {seq}: the RFC 3161 backend could not be loaded on this "
-                        f"machine ({e}). The evidence itself has not been judged.")
-                return "fail"
             raw = base64.b64decode(receipt["token_b64"])
-            try:
-                tst = decode_timestamp_response(raw)
-            except (ImportError, ModuleNotFoundError, OSError) as e:
-                                                                                   
-                rep.add("fail", "verification_backend_unavailable",
-                        f"anchor {seq}: the RFC 3161 decoder is unavailable on this machine "
-                        f"({e}). The evidence itself has not been judged.")
-                return "fail"
-            mi = tst.tst_info.message_imprint
-            oid = getattr(mi.hash_algorithm, "dotted_string", "") or getattr(mi.hash_algorithm, "_name", "")
-            alg = _DIGEST_OIDS.get(oid, oid).lower()
-            if alg not in hashlib.algorithms_available:
-                rep.add("fail", "anchor_bad_alg", f"anchor {seq}: unsupported imprint algorithm {oid!r}")
-                return "fail"
-            expected = hashlib.new(alg, bytes.fromhex(root)).digest()
-            if mi.message != expected:
-                rep.add("fail", "anchor_imprint_mismatch",
-                        f"anchor {seq}: RFC3161 token does not cover this Merkle root")
-                return "fail"
-
-                                                                                  
-            from rfc3161_client import VerifierBuilder
-
-            from ..trust import root_for_tsa
-            ca = root_for_tsa(receipt.get("tsa_url"))
-            if ca is None:
-                rep.add("warn", "anchor_unverified_tsa",
-                        f"anchor {seq}: imprint matches but TSA {receipt.get('tsa_url')!r} is not in "
-                        f"ProveLog's recognized TSA list (Sectigo, FreeTSA), so the TSA "
-                        f"signature was not validated")
-                return "untrusted"
-            try:
-                verifier = VerifierBuilder().add_root_certificate(ca).build()
-                if not verifier.verify_message(tst, bytes.fromhex(root)):
-                    rep.add("fail", "anchor_sig_invalid",
-                            f"anchor {seq}: RFC3161 signature or cert chain did not validate")
-                    return "fail"
-            except Exception as e:
-                rep.add("fail", "anchor_verify_error", f"anchor {seq}: TSA verification error: {e}")
-                return "fail"
-                                                                                            
-                                                                                                 
-                                                                                        
-                                                                                            
-                                                                                               
-                                                                                                
-            token_time = tst.tst_info.gen_time.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            claimed = str(receipt.get("gen_time") or "")
-            if claimed and not _same_instant(claimed, token_time):
-                rep.add("fail", "anchor_time_mismatch",
-                        f"anchor {seq}: the receipt says it was timestamped at {claimed}, but the "
-                        f"token the TSA signed says {token_time}. Trust the token; the receipt is "
-                        f"misstating its own evidence.")
-                return "fail"
-            rep.add("info", "anchor_rfc3161",
-                    f"anchor {seq}: RFC3161 trusted timestamp from {receipt.get('tsa_url')} "
-                    f"at {token_time}, signature and cert chain validated")
-            return "trusted"
-        except (ImportError, ModuleNotFoundError, OSError) as e:  # pragma: no cover
+        except Exception as e:
+            rep.add("fail", "anchor_decode_error", f"anchor {seq}: token is not base64: {e}")
+            return "fail"
+        try:
+            token = decode(raw)
+        except BackendUnavailable as e:
             rep.add("fail", "verification_backend_unavailable",
                     f"anchor {seq}: the RFC 3161 backend is unavailable on this machine "
                     f"({e}). The evidence itself has not been judged.")
             return "fail"
-        except Exception as e:  # pragma: no cover
-            rep.add("fail", "anchor_decode_error", f"anchor {seq}: cannot decode RFC3161 token: {e}")
+        except (ImportError, ModuleNotFoundError, OSError) as e:
+            rep.add("fail", "verification_backend_unavailable",
+                    f"anchor {seq}: the RFC 3161 backend is unavailable on this machine "
+                    f"({e}). The evidence itself has not been judged.")
             return "fail"
+        except Exception as e:
+            rep.add("fail", "anchor_decode_error",
+                    f"anchor {seq}: cannot decode RFC3161 token: {e}")
+            return "fail"
+
+        mi = token.tst_info.message_imprint
+        oid = getattr(mi.hash_algorithm, "dotted_string", "") or getattr(mi.hash_algorithm, "_name", "")
+        alg = _DIGEST_OIDS.get(oid, oid).lower()
+        if alg not in hashlib.algorithms_available:
+            rep.add("fail", "anchor_bad_alg", f"anchor {seq}: unsupported imprint algorithm {oid!r}")
+            return "fail"
+        expected = hashlib.new(alg, bytes.fromhex(root)).digest()
+        if mi.message != expected:
+            rep.add("fail", "anchor_imprint_mismatch",
+                    f"anchor {seq}: RFC3161 token does not cover this Merkle root")
+            return "fail"
+
+        cas = roots_for_tsa(receipt.get("tsa_url"))
+        if not cas:
+            rep.add("warn", "anchor_unverified_tsa",
+                    f"anchor {seq}: imprint matches but TSA {receipt.get('tsa_url')!r} is not in "
+                    f"ProveLog's recognized TSA list (Sectigo, FreeTSA), so the TSA "
+                    f"signature was not validated")
+            return "untrusted"
+        last_error: Exception | None = None
+        for ca in cas:
+            try:
+                verify_token(token, ca, bytes.fromhex(root))
+                last_error = None
+                break
+            except BackendUnavailable as e:
+                rep.add("fail", "verification_backend_unavailable",
+                        f"anchor {seq}: the RFC 3161 verifier is unavailable on this machine "
+                        f"({e}). The evidence itself has not been judged.")
+                return "fail"
+            except TokenError as e:
+                last_error = e
+                continue
+            except (ImportError, ModuleNotFoundError, OSError) as e:
+                rep.add("fail", "verification_backend_unavailable",
+                        f"anchor {seq}: the RFC 3161 backend is unavailable on this machine "
+                        f"({e}). The evidence itself has not been judged.")
+                return "fail"
+            except Exception as e:
+                last_error = e
+                continue
+        if last_error is not None:
+            rep.add("fail", "anchor_sig_invalid",
+                    f"anchor {seq}: RFC3161 signature or cert chain did not validate: {last_error}")
+            return "fail"
+
+        token_time = token.tst_info.gen_time.astimezone(UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ")
+        claimed = str(receipt.get("gen_time") or "")
+        if claimed and not _same_instant(claimed, token_time):
+            rep.add("fail", "anchor_time_mismatch",
+                    f"anchor {seq}: the receipt says it was timestamped at {claimed}, but the "
+                    f"token the TSA signed says {token_time}. Trust the token; the receipt is "
+                    f"misstating its own evidence.")
+            return "fail"
+        rep.add("info", "anchor_rfc3161",
+                f"anchor {seq}: RFC3161 trusted timestamp from {receipt.get('tsa_url')} "
+                f"at {token_time}, signature and cert chain validated")
+        return "trusted"
     rep.add("fail", "anchor_unknown_kind", f"anchor {seq}: unknown anchor kind {kind!r}")
     return "fail"
 

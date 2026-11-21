@@ -99,6 +99,7 @@ def assess(item):
     item["covered"] = min(item["total"], max((c for c, _, _ in cover), default=0))
     item["tsas"] = sorted({_tsa_label(u) for _, _, u in cover})
     item["complete"] = rep.axes.time == "pass" and rep.axes.coverage == "complete"
+    item["unverified"] = rep.result == "cannot_verify"
     item["state"] = (
         "complete"
         if item["complete"]
@@ -113,6 +114,11 @@ def assess(item):
 
 def blocked(item):
     rep = item["rep"]
+                                                                          
+                                                                              
+                                                                           
+    if rep.result == "cannot_verify":
+        return False
     return not rep.ok or rep.axes.integrity != "pass" or rep.axes.attribution == "fail"
 
 
@@ -130,6 +136,10 @@ def describe_status(items):
     if len(items) == 1:
         item = items[0]
         n, c = item["total"], item["covered"]
+        if item.get("unverified"):
+            say("Could not verify on this machine: the RFC 3161 backend is unavailable.")
+            say("The export will still save the evidence. Verify the ZIP with "
+                "verify-offline.html or on another machine.")
         if item["complete"]:
             say(f"All {n:,} records have verified timestamps{tsa_suffix(items)}.")
         elif item["state"] == "partial":
@@ -413,7 +423,8 @@ def write_items(items, args):
         try:
             for item in items:
                 out = names.next_free(root / names.pack_basename(item["row"]))
-                atomic_write(out, build_pack(item["bundle"], extra_files=item["files"] or None))
+                atomic_write(out, build_pack(item["bundle"], extra_files=item["files"] or None,
+                                             unverified=bool(item.get("unverified"))))
                 written.append(str(out.resolve()))
                 index.append({**item["row"], "file": out.name, "status": "ok", "stamped": item["covered"]})
             atomic_write(
@@ -450,7 +461,8 @@ def write_items(items, args):
         payload = (
             json.dumps(item["bundle"], indent=2).encode()
             if args.bundle
-            else build_pack(item["bundle"], extra_files=item["files"] or None)
+            else build_pack(item["bundle"], extra_files=item["files"] or None,
+                            unverified=bool(item.get("unverified")))
         )
         atomic_write(out, payload, overwrite)
     else:
@@ -479,7 +491,8 @@ def write_items(items, args):
                 }
             )
         try:
-            write_collection(Path(temp), members, overwrite=True)
+            write_collection(Path(temp), members, overwrite=True,
+                             unverified=any(i.get("unverified") for i in items))
             if overwrite:
                 os.replace(temp, out)
             else:
@@ -622,7 +635,7 @@ def run(args):
         say("Selected: " + sel.describe(targets[0]) + "\n")
     else:
         say(f"Selected {len(targets)} conversations.\n")
-    items, failures, backend_failures = [], [], []
+    items, failures = [], []
     for index, row in enumerate(targets, 1):
         if len(targets) == 1:
             say("Checking records, attachments and timestamps…")
@@ -638,12 +651,6 @@ def run(args):
             item = assess(
                 {"row": dict(row), "bundle": copy.deepcopy(bundle), "files": files, "missing": missing}
             )
-            if item["rep"].result == "cannot_verify":
-                                                                            
-                                                                           
-                backend_failures.append(
-                    f"  {sel._title(row)}: {reason(item)}")
-                continue
             if blocked(item):
                 raise ValueError(reason(item))
             items.append(item)
@@ -656,17 +663,6 @@ def run(args):
             failures.append(f"  {sel._title(row)}: {exc}")
     if len(targets) > 1 and sys.stderr.isatty():
         say()
-    if backend_failures:
-        say(
-            "Cannot export: verification backend unavailable.\n"
-            + "\n".join(backend_failures)
-            + "\n\nNo file was written. The conversations are intact; this machine "
-              "cannot decode RFC 3161 tokens.\n"
-              "Verify a pack with verify-offline.html in a browser, or export on a "
-              "machine where the native extension is permitted (a WDAC/AV policy can "
-              "block it)."
-        )
-        return 1
     if failures:
         say(
             "Cannot export the selected conversations.\n"

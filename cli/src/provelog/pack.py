@@ -129,6 +129,13 @@ def _offline_assets() -> dict[str, bytes]:
             "verify-offline.html is missing; rebuild the package data")
     assets = {_OFFLINE_VERIFIER: verifier.read_bytes(),
               "README.txt": _OFFLINE_README.encode("utf-8")}
+                                                                              
+                                                                             
+    notices = base / "web" / "THIRD_PARTY_NOTICES.md"
+    if not notices.is_file():
+        notices = base.parents[1] / "web" / "THIRD_PARTY_NOTICES.md"
+    if notices.is_file():
+        assets["THIRD_PARTY_NOTICES.txt"] = notices.read_bytes()
     for source, target in (("sectigo_tsa_cacert.pem", "trust/sectigo.pem"),
                            ("freetsa_cacert.pem", "trust/freetsa.pem")):
         path = base / "trust" / source
@@ -139,7 +146,8 @@ def _offline_assets() -> dict[str, bytes]:
 
 def build_pack(bundle: dict[str, Any], *,
                extra_files: dict[str, bytes] | None = None,
-               guide: str | None = None) -> bytes:
+               guide: str | None = None,
+               unverified: bool = False) -> bytes:
     """Return the bytes of a ZIP pack for the given bundle.
 
     extra_files ride along as members of the same pack (and land in
@@ -150,12 +158,19 @@ def build_pack(bundle: dict[str, Any], *,
     bundle = with_format_headers(bundle)
     if guide is None:
         guide = _GUIDE.format(disclaimer=_DISCLAIMER)
-        tier = str(bundle.get("capture_tier") or "")
-        if tier:
-            guide = guide.replace(
-                "How to verify this pack\n=================================\n",
-                f"How to verify this pack\n=================================\n\n"
-                f"Capture method: {tier}\n", 1)
+    if unverified:
+        guide = (
+            "IMPORTANT: this pack was exported on a machine where the RFC 3161\n"
+            "verifier could not run, so it was NOT verified locally.\n"
+            "Verify it with verify-offline.html in a browser, or on another machine.\n\n"
+            + guide
+        )
+    tier = str(bundle.get("capture_tier") or "")
+    if tier:
+        guide = guide.replace(
+            "How to verify this pack\n=================================\n",
+            f"How to verify this pack\n=================================\n\n"
+            f"Capture method: {tier}\n", 1)
     files: dict[str, bytes] = {
         "bundle.json": json.dumps(bundle, indent=2, ensure_ascii=False).encode("utf-8"),
         "VERIFY.txt": guide.encode("utf-8"),

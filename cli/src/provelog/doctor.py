@@ -10,6 +10,7 @@ import json
 import os
 import stat
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -77,25 +78,67 @@ def _backend_check() -> Check:
 
     Separate from `chains` because a blocked/absent native extension says
     nothing about the records: it says this reader cannot judge the time here.
+    The pure-Python fallback means a blocked native extension is no longer a
+    hard failure.
     """
     hint = ("verify a pack with verify-offline.html in a browser, or run "
             "provelog on a machine where the RFC 3161 extension is permitted; "
             "`python -m provelog` works when the provelog.exe launcher is blocked")
-    try:
-        from rfc3161_client import VerifierBuilder  # noqa: F401
+    from .tsa_backend import probe
+    kind, detail = probe()
+    if kind == "unavailable":
+        return Check("backend", "fail",
+                     f"no RFC 3161 verifier can run: {detail[:300]}", hint)
+    if kind == "pure":
+        return Check("backend", "ok",
+                     "RFC 3161 verifier: pure-Python fallback "
+                     f"(native unavailable: {detail[:160]})")
+    return Check("backend", "ok", "RFC 3161 verifier: native")
 
-        from .tsa_der import decode_timestamp_response
-    except (ImportError, ModuleNotFoundError, OSError) as exc:
-        return Check("backend", "fail",
-                     f"RFC 3161 verifier cannot load: {exc}", hint)
+
+def _viewer_check() -> Check:
+    """The viewer is optional; its native web stack may be blocked.
+
+    export/verify must remain usable when fastapi/pydantic/uvicorn cannot
+    load, so this is a warning, not a health failure.
+    """
     try:
-        decode_timestamp_response(b"")                                            
-    except (ImportError, ModuleNotFoundError, OSError) as exc:
-        return Check("backend", "fail",
-                     f"RFC 3161 verifier cannot be called: {exc}", hint)
-    except Exception:                      # noqa: BLE001 - it ran and refused garbage
-        pass
-    return Check("backend", "ok", "RFC 3161 verifier loads and runs")
+        import fastapi
+        import pydantic
+        import uvicorn
+    except (ImportError, OSError) as exc:
+        return Check(
+            "viewer", "warn",
+            f"viewer web stack cannot load: {exc}",
+            "export and verify are unaffected; use `provelog export` and open "
+            "verify-offline.html from the pack")
+    pv = str(getattr(pydantic, "VERSION", ""))
+    if not pv.startswith("2."):
+        return Check(
+            "viewer", "warn",
+            f"pydantic {pv or 'unknown'} is not v2; the viewer may not load",
+            "reinstall with `pip install -U 'provelog'` to get the pinned "
+            "pydantic 2.x web stack")
+    fv = str(getattr(fastapi, "__version__", "?"))
+    uv = str(getattr(uvicorn, "__version__", "?"))
+    return Check("viewer", "ok",
+                 f"viewer dependencies load (fastapi {fv}, pydantic {pv}, "
+                 f"uvicorn {uv})")
+
+
+def _anchor_error_check() -> Check | None:
+    """Surface the relay's last 409; a reinstall may have opened a new stream."""
+    from . import anchoring
+    err = anchoring.last_anchor_error()
+    if not err:
+        return None
+    age = max(0, int((time.time() - float(err.get("at") or 0)) / 60))
+    detail = str(err.get("detail") or "").replace("\n", " ")[:240]
+    return Check(
+        "anchor", "warn",
+        f"anchor refused ({err.get('status') or 409}) {age} min ago: {detail}",
+        "a reinstall starts a new local chain; ProveLog opens a new relay stream "
+        "automatically. If this persists, export and verify offline.")
 
 
 def _chain_check(home: Path, store_path: Path) -> Check:
@@ -261,6 +304,10 @@ def run(home: Path | None = None, *, offline: bool = False) -> Report:
                             f"Records directory is readable: {root}"))
         backend = _backend_check()
         checks.append(backend)
+        checks.append(_viewer_check())
+        anchor = _anchor_error_check()
+        if anchor is not None:
+            checks.append(anchor)
         checks.append(_chain_check(home, root))
 
     latest = _latest_stamp(root)

@@ -38,6 +38,8 @@ def _provelog_command() -> str:
 
 def _watch_command() -> str:
     """The internal collector process (not a `provelog` subcommand)."""
+    if sys.platform == "win32":
+        return f'"{_windows_pythonw()}" -m provelog.watch_runner'
     return f'"{sys.executable}" -m provelog.watch_runner'
 
 
@@ -82,6 +84,95 @@ def _windows_pythonw() -> Path:
     return pythonw if pythonw.is_file() else exe
 
 
+                                                                              
+                                                                              
+                                                                             
+                                                                    
+_WINDOWS_WATCH_FILTER = (
+    "$_.Name -like 'python*' -and "
+    "$_.CommandLine -like '*-m provelog.watch_runner*' -and "
+    "$_.ProcessId -ne $PID"
+)
+
+
+def _windows_watch_query(pid: int | None = None) -> str:
+    scope = (f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'"
+             if pid is not None else "Get-CimInstance Win32_Process")
+    return (f"{scope} | Where-Object {{ {_WINDOWS_WATCH_FILTER} }} | "
+            "Select-Object -ExpandProperty ProcessId")
+
+
+def _windows_watch_pids() -> list[int] | None:
+    """PIDs of running collectors, or None when PowerShell cannot tell us."""
+    try:
+        out = subprocess.run([
+            "powershell", "-NoProfile", "-NonInteractive", "-Command",
+            _windows_watch_query(),
+        ], capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return [int(line.strip()) for line in out.stdout.splitlines()
+            if line.strip().isdigit()]
+
+
+def _windows_pid_is_watch_runner(pid: int) -> bool | None:
+    """Confirm one PID is still a Python collector before killing it.
+
+    None means the confirmation query failed (do not kill); False means the PID
+    is gone or is some other process (do not kill).
+    """
+    try:
+        out = subprocess.run([
+            "powershell", "-NoProfile", "-NonInteractive", "-Command",
+            _windows_watch_query(pid),
+        ], capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return any(line.strip() == str(pid) for line in out.stdout.splitlines())
+
+
+def stop_watch_process() -> bool:
+    """Stop the Windows collector now. False means none was running.
+
+    uninstall() must not leave a recorder writing after the user removed the
+    autostart: on Windows the Run key only controls the NEXT login.
+    """
+    if sys.platform != "win32":
+        return False
+    pids = _windows_watch_pids()
+    if pids is None:
+        raise OSError("could not enumerate the collector process")
+    if not pids:
+        return False
+    stopped = False
+    for pid in pids:
+        valid = _windows_pid_is_watch_runner(pid)
+        if valid is None:
+            raise OSError(f"could not validate collector PID {pid}; not killing it")
+        if not valid:
+            continue
+        try:
+            out = subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                                 capture_output=True, text=True, timeout=8)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise OSError(f"could not stop collector PID {pid}: {exc}") from exc
+        if out.returncode != 0:
+                                                                              
+                                                              
+            remaining = _windows_watch_pids()
+            if remaining is not None and pid not in remaining:
+                stopped = True                                                 
+                continue
+            raise OSError(f"taskkill failed for collector PID {pid}: "
+                          f"{(out.stderr or out.stdout).strip()}")
+        stopped = True
+    return stopped
+
+
 def watch_process_running() -> bool | None:
     """Whether the internal collector process is visible.
 
@@ -89,18 +180,8 @@ def watch_process_running() -> bool | None:
     "not running". A stale pre-0.2 install can still show the old command name.
     """
     if sys.platform == "win32":
-        try:
-            out = subprocess.run([
-                "powershell", "-NoProfile", "-NonInteractive", "-Command",
-                "Get-CimInstance Win32_Process | "
-                "Where-Object { $_.CommandLine -like '*provelog.watch_runner*' } | "
-                "Select-Object -First 1",
-            ], capture_output=True, text=True, timeout=8)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if out.returncode != 0:
-            return None
-        return bool(out.stdout.strip())
+        pids = _windows_watch_pids()
+        return None if pids is None else bool(pids)
     if sys.platform not in ("darwin", "linux"):
         return None
     try:
@@ -127,6 +208,14 @@ def watch_agent_installed() -> bool:
     if sys.platform.startswith("linux"):
         return (_linux_systemd_user_dir() / f"{WATCH_AGENT_LABEL}.service").is_file()
     if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
+                winreg.QueryValueEx(key, WATCH_AGENT_LABEL)
+                return True
+        except (ImportError, OSError):
+            pass
         return (_windows_startup_dir() / f"{WATCH_AGENT_LABEL}.vbs").is_file()
     return False
 
@@ -197,22 +286,62 @@ def install_watch_agent(interval: int = 10) -> str:
         _systemctl_user("enable", "--now", "ai.provelog.watch.service")
         return str(unit)
     if sys.platform == "win32":
-        startup = _windows_startup_dir()
-        startup.mkdir(parents=True, exist_ok=True)
-        script = startup / "ai.provelog.watch.vbs"
-        run = f'{_watch_command()} --interval {int(interval)}'
-        script.write_text('Set sh = CreateObject("WScript.Shell")\n'
-                          f'sh.Run "{run.replace(chr(34), chr(34) * 2)}", 0, False\n',
-                          encoding="utf-8")
-        try:
-            subprocess.Popen([str(_windows_pythonw()), "-m", "provelog.watch_runner",
-                              "--interval", str(int(interval))],
-                             creationflags=0x08000000 | 0x00000008,
-                             close_fds=True)
-        except OSError:
-            pass
-        return str(script)
+        logs_dir().mkdir(parents=True, exist_ok=True)
+        _windows_set_run_value(f'{_watch_command()} --interval {int(interval)}')
+                                                                         
+        (_windows_startup_dir() / f"{WATCH_AGENT_LABEL}.vbs").unlink(missing_ok=True)
+        _windows_install_launcher()
+        _windows_start_watch(interval)
+        return ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\"
+                + WATCH_AGENT_LABEL)
     return ""
+
+
+def _windows_run_key():
+    import winreg
+    return winreg, winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _windows_set_run_value(value: str) -> bool:
+    try:
+        winreg, hive, path = _windows_run_key()
+        with winreg.CreateKey(hive, path) as key:
+            winreg.SetValueEx(key, WATCH_AGENT_LABEL, 0, winreg.REG_SZ, value)
+        return True
+    except (ImportError, OSError):
+        return False
+
+
+def _windows_launcher_path() -> Path:
+    return _windows_startup_dir().parent / "ProveLog.cmd"
+
+
+def _windows_install_launcher() -> None:
+    """A Start Menu .cmd, not an executable: double-click opens the viewer."""
+    _windows_startup_dir().parent.mkdir(parents=True, exist_ok=True)
+    _windows_launcher_path().write_text(
+        "@echo off\r\n"
+        f'start "" "{_windows_pythonw()}" -m provelog browse\r\n',
+        encoding="utf-8",
+    )
+
+
+def _windows_start_watch(interval: int) -> None:
+    """Start the collector now; log its output, and try to leave a Job Object."""
+    logs_dir().mkdir(parents=True, exist_ok=True)
+    log = logs_dir() / "watch.log"
+    args = [str(_windows_pythonw()), "-m", "provelog.watch_runner",
+            "--interval", str(int(interval))]
+                                                                     
+    for flags in (0x08000000 | 0x00000008 | 0x01000000,
+                  0x08000000 | 0x00000008):
+        try:
+            with open(log, "ab") as out:
+                subprocess.Popen(args, creationflags=flags, close_fds=True,
+                                 stdout=out, stderr=subprocess.STDOUT)
+            return
+        except OSError:
+            continue
 
 
 def remove_watch_agent() -> str:
@@ -235,9 +364,21 @@ def remove_watch_agent() -> str:
         _systemctl_user("daemon-reload")
         return removed
     if sys.platform == "win32":
+        removed = ""
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                                0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, WATCH_AGENT_LABEL)
+                removed = "HKCU Run / " + WATCH_AGENT_LABEL
+        except (ImportError, OSError):
+            pass
         script = _windows_startup_dir() / "ai.provelog.watch.vbs"
-        removed = str(script) if script.is_file() else ""
-        script.unlink(missing_ok=True)
+        if script.is_file():
+            script.unlink()
+            removed = str(script)
+        _windows_launcher_path().unlink(missing_ok=True)
         return removed
     return ""
 
@@ -311,12 +452,16 @@ def baseline_ms() -> int | None:
 
 
 def _has_rfc3161() -> bool:
-    """Whether the native RFC3161 extension is importable in this interpreter."""
-    from importlib.util import find_spec
+    """Whether an RFC3161 decoder can run here (native or pure fallback)."""
     try:
-        return find_spec("rfc3161_client") is not None
-    except (ImportError, ValueError):
-        return False
+        from .tsa_backend import probe
+        return probe()[0] != "unavailable"
+    except Exception:
+        from importlib.util import find_spec
+        try:
+            return find_spec("rfc3161_client") is not None
+        except (ImportError, ValueError):
+            return False
 
 
 def platform_support() -> dict[str, str]:
@@ -360,6 +505,14 @@ def setup() -> dict:
     if support["state"] == "unsupported":
         return {"error": "unsupported_platform",
                 "platform": support, "message": support["message"]}
+                                                                               
+                                                                               
+                                                                             
+                                                                     
+    try:
+        stop_watch_process()
+    except OSError:
+        pass
                                                                            
                                              
     baseline = install_baseline()
@@ -528,7 +681,12 @@ def setup() -> dict:
 def uninstall() -> dict:
     watch = ""
     viewer = ""
+    stopped = False
     errors: list[dict[str, str]] = []
+    try:
+        stopped = stop_watch_process()
+    except Exception as exc:                                    
+        errors.append({"item": "collector process", "reason": str(exc)})
     try:
         watch = remove_watch_agent()
     except Exception as exc:                                       
@@ -537,4 +695,5 @@ def uninstall() -> dict:
         viewer = remove_legacy_viewer_agent()
     except Exception as exc:
         errors.append({"item": "viewer service file", "reason": str(exc)})
-    return {"watch": watch, "viewer": viewer, "errors": errors}
+    return {"watch": watch, "viewer": viewer,
+            "stopped": stopped, "errors": errors}

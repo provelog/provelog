@@ -35,7 +35,7 @@ def is_older(current: str, minimum: str) -> bool:
     return left + (0,) * (width - len(left)) < right + (0,) * (width - len(right))
 
 
-def check(*, timeout: float = 2.0) -> dict[str, Any] | None:
+def check(*, timeout: float = 5.0) -> dict[str, Any] | None:
     """Return the latest PyPI release; None on any network/shape failure.
 
     A pre-release or otherwise non-numeric version is not offered as an update

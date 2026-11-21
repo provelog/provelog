@@ -55,7 +55,7 @@ def _zinfo(name: str) -> zipfile.ZipInfo:
 
 
 def write_collection(out: Path, members: Iterable[dict[str, Any]], *,
-                     overwrite: bool = False) -> Path:
+                     overwrite: bool = False, unverified: bool = False) -> Path:
     """Write the collection to `out` atomically; return the final path.
 
     `members` yields dicts: ``name`` (safe member directory name), ``bundle``
@@ -105,7 +105,14 @@ def write_collection(out: Path, members: Iterable[dict[str, Any]], *,
             }
             add(z, "collection.json",
                 json.dumps(collection, indent=2, ensure_ascii=False).encode("utf-8"))
-            add(z, "VERIFY.txt", _GUIDE.encode("utf-8"))
+            guide = _GUIDE
+            if unverified:
+                guide = (
+                    "IMPORTANT: this collection was exported on a machine where\n"
+                    "the RFC 3161 verifier could not run. It was NOT verified\n"
+                    "locally. Verify it with verify-offline.html in a browser, or\n"
+                    "on another machine.\n\n" + guide)
+            add(z, "VERIFY.txt", guide.encode("utf-8"))
             manifest = {
                 "format": COLLECTION_FORMAT,
                 "members": len(entries),
