@@ -18,3 +18,9 @@ Thumbs.db
 .provelog.json
 *.db
 *.log
+
+
+dev/fake-api/logs/
+
+
+dev/localtest-tsa/certs/

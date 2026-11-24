@@ -1367,12 +1367,13 @@ def load(home: Path, session_id: str, verify_integrity: bool = True
                                                                            
                                                                         
                        
-    retracted_turns = sorted({
-        int((record.get("payload") or {}).get("turn"))
-        for record in events
-        if record.get("action_type") == "retraction"
-        and isinstance((record.get("payload") or {}).get("turn"), int)
-    })
+    retracted_turns = _retraction_turns(events)
+    host_retracted = manifest.get("host_retracted_turns") or []
+    if isinstance(host_retracted, list):
+        retracted_turns = sorted(set(retracted_turns) | {
+            int(turn) for turn in host_retracted
+            if isinstance(turn, int) or str(turn).isdigit()
+        })
                                                                           
                                                                             
     turn_ends = (_turn_ends(events, stats["user_at"])
@@ -1559,6 +1560,23 @@ def _trajectory_json(value: Any, limit: int = 8000) -> str:
     except (TypeError, ValueError):
         text = str(value)
     return text if len(text) <= limit else text[:limit] + "\n…"
+
+
+def _retraction_turns(events: list[dict[str, Any]]) -> list[int]:
+    """Every turn covered by a signed retraction, including a multi-turn one."""
+    turns: set[int] = set()
+    for record in events:
+        if record.get("action_type") != "retraction":
+            continue
+        payload = record.get("payload") or {}
+        start = payload.get("turn")
+        if not isinstance(start, int):
+            continue
+        count = payload.get("turns")
+        count = count if isinstance(count, int) and count > 0 else 1
+        for offset in range(count):
+            turns.add(start + offset)
+    return sorted(turns)
 
 
 def _retraction_text(payload: dict[str, Any], turn: Any) -> str:

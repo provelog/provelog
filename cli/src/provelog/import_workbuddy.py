@@ -238,10 +238,6 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
     stream = stream or f"local-{host}-{_bare(session_id)}"
     folder, manifest = _session_state(store, session_id)
     state = store.session_capture(session_id)
-    if state and folder is None:
-                                                                            
-                                                                         
-        state = {}
 
     if not state and folder is not None and int(manifest.get("records") or 0) > 0:
         store.set_session_capture(session_id, host_seq=consumed)
@@ -261,6 +257,8 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
     ]
     if since_ms is not None and folder is None and not selected:
         return {"session_id": session_id, "skipped": "before_baseline"}
+    if folder is None and state and not selected:
+        return {"session_id": session_id, "skipped": "deleted_no_new_events"}
 
     key = key or _device_key()
     if folder is None:

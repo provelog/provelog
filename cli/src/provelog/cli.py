@@ -136,11 +136,12 @@ def _cmd_setup(args) -> int:
                                                                            
                                                                               
                                                                             
+                                                                               
+                                                                               
+                                                                         
     if onboarding.watch_agent_installed() and running is True:
         print("ProveLog is already set up.")
-        print()
-        print("Run provelog status to check status.")
-        return 0
+        print("Restarting the collector to load the installed version…")
 
     result = onboarding.setup()
     if result.get("error") == "unsupported_platform":
@@ -559,6 +560,7 @@ def _watch_all_once(store, *, home, workbuddy_home, kimi_homes, baseline):
     says so, but v1 does not record them.
     """
     from . import (
+        capture_state,
         import_claude_code,
         import_cline,
         import_codebuddy,
@@ -580,7 +582,10 @@ def _watch_all_once(store, *, home, workbuddy_home, kimi_homes, baseline):
         import_vscode_agent,
         import_workbuddy,
     )
-
+    if capture_state.reconcile_missing(store):
+                                                                               
+                                                     
+        return []
     rows = import_dsh.watch_once(store, home, since_ms=baseline)
     rows += import_workbuddy.watch_once(store, workbuddy_home, since_ms=baseline)
     rows += import_kimi.watch_once(store, kimi_homes, since_ms=baseline)
@@ -602,6 +607,21 @@ def _watch_all_once(store, *, home, workbuddy_home, kimi_homes, baseline):
     rows += import_codebuddy_code.watch_once(store, since_ms=baseline)
     rows += import_vscode_agent.watch_once(store, since_ms=baseline)
     return rows
+
+
+def _watch_store() -> tuple:
+    """Open the store read-only when the record root is absent.
+
+    `open_store()` mkdirs its root. During the missing-root grace window that
+    would itself recreate the tree the check is trying to protect; a read-only
+    store can still locate/read state and lets the collector wait.
+    """
+    from .easy import _load_config_file
+    from .store import open_store, resolve_store_path
+    path = resolve_store_path(_load_config_file())
+    if Path(path).exists():
+        return open_store(path), path
+    return open_store(path, read_only=True), path
 
 
 def _cmd_watch(args) -> int:
@@ -627,7 +647,7 @@ def _cmd_watch(args) -> int:
               else "could not install the background watch agent")
         return 0
 
-    store, store_path = _open_local_store()
+    store, store_path = _watch_store()
     home = import_dsh.dsh_home(getattr(args, "dsh_home", None))
     workbuddy_home = import_workbuddy.workbuddy_home()
     kimi_homes = import_kimi.kimi_homes()
@@ -670,6 +690,18 @@ def _cmd_watch(args) -> int:
             pause_state.clear()
             print(f"recording resumed; gap closed at {info.get('resumed_at')}")
             sys.stdout.flush()
+        from . import capture_state
+        if capture_state.reconcile_missing(store):
+            if args.once:
+                return 0
+            try:
+                _time.sleep(float(args.interval))
+            except KeyboardInterrupt:
+                return 0
+            continue
+        if store.read_only:
+                                                                                
+            store, store_path = _open_local_store()
         rows = _watch_all_once(store, home=home, workbuddy_home=workbuddy_home,
                                kimi_homes=kimi_homes, baseline=baseline)
         import_dsh.flush_anchor_pass(store)

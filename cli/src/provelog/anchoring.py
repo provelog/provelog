@@ -139,15 +139,38 @@ def _alias_for(stream_id: str) -> str | None:
     return _aliases().get(stream_id)
 
 
-def _set_alias(local: str, relay: str) -> None:
+def _set_alias(local: str, relay: str) -> bool:
     rows = _aliases()
     rows[local] = relay
     path = _aliases_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        return True
     except OSError:
-        pass
+        return False
+
+
+def _new_alias(local: str) -> str:
+    return f"{local}-{secrets.token_hex(3)}"
+
+
+def _ensure_alias(local: str) -> str:
+    """Every new stream gets a random relay alias.
+
+    Relay only ever sees the alias; the local store, export and verification
+    keep using the original local stream id. If the alias file cannot be
+    written, fall back to the local id rather than creating a new stream on
+    every pass.
+    """
+    existing = _alias_for(local)
+    if existing:
+        return existing
+    candidate = _new_alias(local)
+    if _set_alias(local, candidate):
+        return candidate
+    _log.warning("could not persist stream alias for %s; using local id", _tag(local))
+    return local
 
 
 def _fresh_local_stream(store: Any, stream_id: str) -> bool:
@@ -435,8 +458,8 @@ def maybe_anchor(store: Any, stream_id: str, *, url: str | None = None,
     signing_key = key or _device_key()
     covers = len(leaves)
     local_stream = stream_id
-    alias = _alias_for(local_stream)
     fresh = _fresh_local_stream(store, local_stream)
+    relay_stream = _ensure_alias(local_stream)
 
     def payload_for(relay_stream: str) -> dict[str, Any]:
         return {
@@ -456,7 +479,6 @@ def maybe_anchor(store: Any, stream_id: str, *, url: str | None = None,
 
     from . import __version__
 
-    relay_stream = alias or local_stream
     try:
         resp = send(relay_stream)
     except httpx.HTTPError:
@@ -466,9 +488,11 @@ def maybe_anchor(store: Any, stream_id: str, *, url: str | None = None,
     if resp.status_code == 409:
         detail = _response_detail(resp)
         _record_anchor_error(local_stream, detail)
-        if alias is None and fresh:
-            new_stream = f"{relay_stream}-{secrets.token_hex(3)}"
-            _set_alias(local_stream, new_stream)
+        if fresh:
+            new_stream = _new_alias(local_stream)
+            if not _set_alias(local_stream, new_stream):
+                _conflict_until[local_stream] = stamp_now + ANCHOR_CONFLICT_BACKOFF_S
+                return None
             relay_stream = new_stream
             try:
                 resp = send(relay_stream)

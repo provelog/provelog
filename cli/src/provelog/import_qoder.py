@@ -208,18 +208,20 @@ def _ingest_session(db: Path, host: str, session: dict[str, Any], store: Any,
             (m["sequence"] for m in messages), default=0))
         return {"session_id": session_id, "skipped": "legacy_watermark"}
 
-                                                                              
                                                                             
-                                                                       
-    if session.get("imported_from") and folder is None:
-        since_ms = None
+                                                                             
+                                                       
     watermark = int(state.get("host_seq", -1))
+    deleted_at = int(state.get("deleted_at_ms") or 0)
     selected = [m for m in messages
                 if m["sequence"] > watermark
                 and m["role"] in ("user", "assistant")
-                and (since_ms is None or m["created_at"] > since_ms)]
+                and (since_ms is None or m["created_at"] > since_ms)
+                and (not deleted_at or m["created_at"] > deleted_at)]
     if since_ms is not None and folder is None and not selected:
         return {"session_id": session_id, "skipped": "before_baseline"}
+    if folder is None and state and not selected:
+        return {"session_id": session_id, "skipped": "deleted_no_new_events"}
 
     key = key or _device_key()
     project = _project(session)

@@ -196,10 +196,22 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
 
     watermark = int(state.get("host_seq", -1))
     req_watermark = int(state.get("assignment_seq", -1))
-    selected_reqs = reqs[max(0, req_watermark):]
-    selected_events = [event for index, event in enumerate(events) if index >= watermark]
+    deleted_at = int(state.get("deleted_at_ms") or 0)
+    selected_reqs = [
+        req for req in reqs[max(0, req_watermark):]
+        if (since_ms is None or _ms(req.get("time")) > since_ms)
+        and (not deleted_at or _ms(req.get("time")) > deleted_at)
+    ]
+    selected_events = [
+        event for index, event in enumerate(events)
+        if index >= watermark
+        and (since_ms is None or _event_time(event) > since_ms)
+        and (not deleted_at or _event_time(event) > deleted_at)
+    ]
     if since_ms is not None and folder is None and not selected_reqs and not selected_events:
         return {"session_id": session_id, "skipped": "before_baseline"}
+    if folder is None and state and not selected_reqs and not selected_events:
+        return {"session_id": session_id, "skipped": "deleted_no_new_events"}
 
     created = _ms(reqs[0]["time"]) if reqs else int(stamp * 1000)
     title = ""

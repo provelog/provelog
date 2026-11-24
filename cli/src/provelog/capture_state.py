@@ -91,7 +91,132 @@ def mark_deleted(session_id: str, at_ms: int | None = None) -> None:
     data = load()
     entry = data["sessions"].setdefault(str(session_id), {})
     entry["deleted_at_ms"] = int(at_ms if at_ms is not None else _time.time() * 1000)
+    entry["deleted_by"] = "viewer"
     _save(data)
+
+
+                                                                              
+                                                             
+ROOT_MISSING_GRACE_S = 600.0
+
+
+def _iso_ms(value: Any) -> int:
+    from datetime import datetime
+    try:
+        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                   .timestamp() * 1000)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _has_new_records(store: Any, session_id: str, boundary: int) -> bool:
+    try:
+        events = store.session_events(session_id)
+    except Exception:
+        return True
+    return any(_iso_ms(event.get("ts_utc")) > boundary for event in events)
+
+
+def reconcile_missing(store: Any, at_ms: int | None = None,
+                      now: float | None = None) -> bool:
+    """Reconcile state rows with the evidence folders they describe.
+
+    Returns True when the whole store root is missing inside the grace window:
+    callers must skip this pass rather than rebuild folders from old events.
+
+    A missing root is ambiguous (Finder deletion vs an unmounted disk). After
+    the grace period it is treated as a deletion of every conversation; before
+    that, nothing is marked and no importer runs. A single missing session
+    folder while the root exists is unambiguous and is marked immediately.
+    """
+    import time as _time
+
+    data = load()
+    sessions = data.get("sessions")
+    if not isinstance(sessions, dict):
+        return False
+    if not sessions:
+                                                                              
+                                           
+        if data.pop("store_missing_since", None) is not None:
+            _save(data)
+        return False
+    now_s = float(now if now is not None else _time.time())
+    now_ms = int(at_ms if at_ms is not None else now_s * 1000)
+    root = getattr(store, "root", None)
+    root_missing = bool(root is not None and not Path(root).exists())
+
+    def last_captured_ms(entry: dict[str, Any]) -> int:
+        for key in ("last_ms", "source_updated_at"):
+            value = entry.get(key)
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                return number
+        for key in ("source_mtime", "commit_at"):
+            value = entry.get(key)
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                return int(number * 1000) if number < 10_000_000_000 else int(number)
+        return now_ms
+
+    changed = 0
+    if root_missing:
+        since = data.get("store_missing_since")
+        try:
+            since_s = float(since)
+        except (TypeError, ValueError):
+            since_s = 0.0
+        if since_s <= 0:
+            data["store_missing_since"] = now_s
+            _save(data)
+            return True
+        if now_s - since_s < ROOT_MISSING_GRACE_S:
+            return True
+        for entry in sessions.values():
+            if not isinstance(entry, dict) or entry.get("deleted_at_ms"):
+                continue
+            entry["deleted_at_ms"] = last_captured_ms(entry)
+            entry["deleted_by"] = "missing_root"
+            changed += 1
+        data.pop("store_missing_since", None)
+        if changed:
+            _save(data)
+        return False
+
+    if data.pop("store_missing_since", None) is not None:
+        changed += 1
+    for session_id, entry in sessions.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            folder = store.locate(session_id)
+        except Exception:
+            continue
+        if folder is None:
+            if not entry.get("deleted_at_ms"):
+                entry["deleted_at_ms"] = last_captured_ms(entry)
+                entry["deleted_by"] = "missing_folder"
+                changed += 1
+            continue
+                                                                            
+                                                                             
+                                                                              
+        if (entry.get("deleted_by") in ("missing_root", "missing_folder")
+                and entry.get("deleted_at_ms")):
+            boundary = int(entry.get("deleted_at_ms") or 0)
+            if not _has_new_records(store, session_id, boundary):
+                entry.pop("deleted_at_ms", None)
+                entry.pop("deleted_by", None)
+                changed += 1
+    if changed:
+        _save(data)
+    return False
 
 
 def stalled_sources(now: float | None = None, min_age_s: float = 900.0,

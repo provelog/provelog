@@ -350,12 +350,20 @@ def ingest(store: Any, cid: str, conv: dict[str, Any], *,
     stream = stream or f"local-doubao-app-{_bare(session_id)}"
     folder, manifest = _session_state(store, session_id)
     state = store.session_capture(session_id)
-    if state and folder is None:
-        state = {}
+    deleted_at = int(state.get("deleted_at_ms") or 0)
     last_ms = int(state.get("last_ms", -1))
-    selected = [message for message in all_messages if message["ts"] > last_ms]
+    selected = [
+        message for message in all_messages
+        if message["ts"] > last_ms
+        and (since_ms is None or message["ts"] > since_ms)
+        and (not deleted_at or message["ts"] > deleted_at)
+    ]
     if not selected:
-        return {"session_id": session_id, "skipped": "unchanged"}
+        if since_ms is not None and folder is None:
+            return {"session_id": session_id, "skipped": "before_baseline"}
+        return {"session_id": session_id,
+                "skipped": "deleted_no_new_events" if state and folder is None
+                else "unchanged"}
 
     key = key or _device_key()
     if folder is None:

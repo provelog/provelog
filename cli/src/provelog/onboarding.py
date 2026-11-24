@@ -423,6 +423,29 @@ def baseline_path() -> Path:
     return root() / "collector.json"
 
 
+def collector_version_path() -> Path:
+    return root() / "collector-version.json"
+
+
+def record_collector_version() -> None:
+    try:
+        from . import __version__
+        root().mkdir(parents=True, exist_ok=True)
+        collector_version_path().write_text(
+            json.dumps({"version": __version__, "at": _now()}, indent=2) + "\n",
+            encoding="utf-8")
+    except OSError:
+        pass
+
+
+def collector_version() -> str:
+    try:
+        data = json.loads(collector_version_path().read_text(encoding="utf-8"))
+        return str(data.get("version") or "")
+    except (OSError, ValueError):
+        return ""
+
+
 def install_baseline() -> dict:
     """Remember WHEN the product was installed.
 
@@ -517,6 +540,7 @@ def setup() -> dict:
                                              
     baseline = install_baseline()
     agent = install_watch_agent()
+    record_collector_version()
     try:
         remove_legacy_viewer_agent()
     except OSError:

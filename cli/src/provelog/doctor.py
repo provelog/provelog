@@ -345,6 +345,12 @@ def run(home: Path | None = None, *, offline: bool = False) -> Report:
 
     if onboarding.watch_agent_installed():
         checks.append(Check("collector", "ok", "Background collector is installed"))
+        installed_version = onboarding.collector_version()
+        if installed_version and installed_version != __version__:
+            checks.append(Check(
+                "collector-version", "warn",
+                f"collector was installed by {installed_version}; this CLI is {__version__}",
+                "run `provelog setup` to restart it with the installed version"))
         from . import capture_state
         stalled = capture_state.stalled_sources()
         if stalled:

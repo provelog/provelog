@@ -626,6 +626,10 @@ body.lb-open{overflow:hidden}
 #outline a .od{flex:none;width:6px;height:6px;border-radius:50%;align-self:center;
   box-shadow:inset 0 0 0 1.5px var(--cap)}
 #outline a .od.ok{background:var(--ok);box-shadow:none}
+#outline .outline-more{display:block;width:calc(100% - 16px);margin:7px 8px 10px;padding:5px 7px;
+  border:0;border-radius:6px;background:transparent;color:var(--cap);font:inherit;
+  font-size:11px;line-height:16px;text-align:left;cursor:pointer}
+#outline .outline-more:hover{background:var(--hover);color:var(--tx2)}
 @media (min-width:1001px){#flow{padding-left:190px;padding-right:20px}}
 @media (min-width:1241px){
   #flow{padding-right:276px}
@@ -1168,6 +1172,7 @@ const STR = {
     trajCompaction: "压缩", trajRetraction: "撤回",
     retractedChip: "已撤回", trajEarlier: "加载更早的轨迹",
     laterMessages: "加载更多 {n} 条消息",
+    outlineMore: "加载更多轮次（还剩 {n} 轮）",
     trajEvent: "事件", trajContent: "内容", trajTokens: "Token", trajTime: "时间",
     trajSearch: "搜索轨迹", trajNoMatch: "没有匹配的轨迹记录。",
     gapBanner: "记录中断：{span} 未记录（用户暂停）。",
@@ -1307,6 +1312,7 @@ const STR = {
     trajCompaction: "Compaction", trajRetraction: "Retracted",
     retractedChip: "Retracted", trajEarlier: "Load earlier trajectory",
     laterMessages: "Load {n} more messages",
+    outlineMore: "Load more turns ({n} left)",
     trajEvent: "Event", trajContent: "Content", trajTokens: "Tokens", trajTime: "Time",
     trajSearch: "Search trajectory", trajNoMatch: "No matching trajectory records.",
     gapBanner: "Recording gap: {span} was not captured (user paused).",
@@ -2958,6 +2964,26 @@ function renderOutline(s) {
       + esc(outlineTitle((users[i] || {}).text || "", n)) + "</span>"
       + (known ? '<span class="od' + (marks[i] ? " ok" : "") + '"></span>' : "") + "</a>";
   }).join("");
+  const totalTurns = Number(s.turns || 0);
+  if (secs.length < totalTurns) {
+    const left = totalTurns - secs.length;
+    box.insertAdjacentHTML("beforeend",
+      '<button type="button" class="outline-more" id="outlineMore">'
+      + esc(fill(T("outlineMore"), { n: left })) + "</button>");
+    const outlineMore = document.getElementById("outlineMore");
+    const loadNext = () => {
+      const more = document.getElementById("moreMessages");
+      if (more && !more.disabled) more.click();
+    };
+    if (outlineMore) outlineMore.onclick = loadNext;
+    
+    
+    box.onscroll = () => {
+      if (box.scrollTop + box.clientHeight >= box.scrollHeight - 18) loadNext();
+    };
+  } else {
+    box.onscroll = null;
+  }
   if (!("IntersectionObserver" in window)) return;
   outlineWatch = new IntersectionObserver((entries) => {
     for (const en of entries) {

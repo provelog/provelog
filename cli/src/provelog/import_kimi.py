@@ -181,6 +181,30 @@ def _ms(value: Any, fallback: int = 0) -> int:
     return fallback
 
 
+def _retractions_meta(events: list[dict[str, Any]]) -> list[int]:
+    """Host retraction turns, including ones older than the import watermark.
+
+    `context.undone` is view metadata, like host_turns. Computing it from the
+    full wire lets the viewer mark retractions in a session that was first
+    imported before this field existed, without rewriting signed records.
+    """
+    turns: set[int] = set()
+    for event in events:
+        if not isinstance(event, dict) or event.get("type") != "context.undone":
+            continue
+        try:
+            start = int(event.get("fromTurnId"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            count = int(event.get("turns") or 1)
+        except (TypeError, ValueError):
+            count = 1
+        for offset in range(max(1, count)):
+            turns.add(start + 1 + offset)
+    return sorted(turns)
+
+
 def read_wire(path: Path) -> tuple[list[dict[str, Any]], int]:
     events: list[dict[str, Any]] = []
     try:
@@ -271,12 +295,17 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
     folder, manifest = _session_state(store, session_id)
     state = store.session_capture(session_id)
     turns_meta = _turns_meta(events)
+    retracted_turns = _retractions_meta(events)
     if (folder is not None and turns_meta
             and manifest.get("host_turns") != turns_meta):
                                                                              
                                            
         store.set_session_fields(session_id, host_turns=turns_meta)
         manifest["host_turns"] = turns_meta
+    if (folder is not None and retracted_turns
+            and manifest.get("host_retracted_turns") != retracted_turns):
+        store.set_session_fields(session_id, host_retracted_turns=retracted_turns)
+        manifest["host_retracted_turns"] = retracted_turns
 
     if not state and folder is not None and int(manifest.get("records") or 0) > 0:
         store.set_session_capture(session_id, host_seq=consumed)
@@ -286,13 +315,17 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
     watermark = int(state.get("host_seq", -1))
     if consumed < watermark:
         return {"session_id": session_id, "skipped": "source_shrank"}
+    deleted_at = int(state.get("deleted_at_ms") or 0)
     selected = [
         (index, event) for index, event in enumerate(events)
         if index >= watermark
         and (since_ms is None or _ms(event.get("time")) > since_ms)
+        and (not deleted_at or _ms(event.get("time")) > deleted_at)
     ]
     if since_ms is not None and folder is None and not selected:
         return {"session_id": session_id, "skipped": "before_baseline"}
+    if folder is None and state and not selected:
+        return {"session_id": session_id, "skipped": "deleted_no_new_events"}
 
     key = key or _device_key()
     if folder is None:
@@ -313,6 +346,8 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
             meta["project"] = facts["cwd"]
         if facts["fork_of"]:
             meta["fork_of"] = facts["fork_of"]
+        if retracted_turns:
+            meta["host_retracted_turns"] = retracted_turns
         fr = Provelog(stream, key=key, store=store, flush=False, float_text=True)
         fr.chain._clock = _clock_for(facts["created_at"] or int(stamp * 1000))
         records = [fr.start(meta)]

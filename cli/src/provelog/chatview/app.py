@@ -387,6 +387,33 @@ def create_app(home: Path | None = None,
         return FileResponse(target, media_type=media,
                             headers={"cache-control": "no-store"})
 
+    def _path_is_in_messages(session_id: str, raw_path: str,
+                             target: Path) -> bool:
+        """Whether this exact path appears in the session's own messages.
+
+        The project/evidence allowlist below is the normal rule. A user can
+        also paste an absolute path outside the project (for example a
+        reference checkout next door); revealing it is safe only when the
+        signed conversation actually contains that path. A cross-site POST
+        cannot invent a path the session never mentioned.
+        """
+        try:
+            view = records.load(home, session_id, verify_integrity=False)
+        except Exception:
+            return False
+        if not view:
+            return False
+        needles = {raw_path, str(target), raw_path.rstrip("/\\")}
+        for message in view.get("messages") or []:
+            chunks = [str(message.get("text") or "")]
+            for call in message.get("tool_calls") or []:
+                chunks.append(str(call.get("input") or ""))
+                chunks.append(str(call.get("output") or ""))
+            text = "\n".join(chunks)
+            if any(needle and needle in text for needle in needles):
+                return True
+        return False
+
     @app.post("/api/records/session/{session_id}/reveal-path")
     def api_reveal_path(session_id: str, path: str, request: Request):
         """Reveal a local file linked from a message, never an arbitrary path."""
@@ -417,7 +444,8 @@ def create_app(home: Path | None = None,
         if folder is not None:
             allowed.append(folder)
         if not any(target == root or target.is_relative_to(root) for root in allowed):
-            raise _not_found(_lang(request))
+            if not _path_is_in_messages(session_id, path, target):
+                raise _not_found(_lang(request))
         if not target.exists():
             raise _not_found(_lang(request))
         try:
