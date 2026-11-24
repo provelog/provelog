@@ -83,15 +83,6 @@ where = ["src"]
 provelog = ["trust/*.pem", "assets/*.png", "assets/*.ico",
             "assets/*.svg", "web/*.html"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
-filterwarnings = [
-
-
-    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
-]
-
 [tool.ruff]
 line-length = 110
 target-version = "py311"
