@@ -264,9 +264,19 @@ def ingest(path: Path, store: Any, *, key: Any | None = None,
         return {"session_id": session_id, "skipped": "legacy_watermark"}
 
     watermark = int(state.get("host_seq", -1))
-    selected = [(i, r) for i, r in enumerate(rows) if i >= watermark]
-    if since_ms is not None and folder is None and not selected:
-        return {"session_id": session_id, "skipped": "before_baseline"}
+    deleted_at = int(state.get("deleted_at_ms") or 0)
+    baseline = since_ms if folder is None else None
+    selected = [
+        (i, row) for i, row in enumerate(rows)
+        if i >= watermark
+        and (baseline is None or _ms(row.get("timestamp")) > baseline)
+        and (not deleted_at or _ms(row.get("timestamp")) > deleted_at)
+    ]
+    if folder is None and not selected:
+        if state and deleted_at:
+            return {"session_id": session_id, "skipped": "deleted_no_new_events"}
+        if since_ms is not None:
+            return {"session_id": session_id, "skipped": "before_baseline"}
     selected = [(i, r) for i, r in selected]
     selected = _merge_assistant_rows([r for _, r in selected])
 

@@ -1,10 +1,10 @@
 [project]
 name = "provelog"
-version = "1.2.15"
+version = "1.2.16"
 description = "A verifiable, complete trajectory record for AI agents. Stores model and tool inputs/outputs locally as an Ed25519-signed, hash-chained record with RFC 3161 anchoring that anyone can verify offline. Records only: it never blocks or intercepts."
 readme = "README.md"
-license = "MIT AND AGPL-3.0-or-later"
-license-files = ["LICENSE", "LICENSE-AGPL", "NOTICE.md"]
+license = "MIT"
+license-files = ["LICENSE", "NOTICE.md"]
 authors = [{ name = "ProveLog", email = "contact@provelog.ai" }]
 requires-python = ">=3.11"
 keywords = [
@@ -78,6 +78,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["provelog.server", "provelog.server.*"]
 
 [tool.setuptools.package-data]
 provelog = ["trust/*.pem", "assets/*.png", "assets/*.ico",

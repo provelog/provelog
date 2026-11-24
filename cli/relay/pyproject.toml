@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "provelog-relay"
+version = "1.2.16"
+description = "ProveLog operator relay: RFC 3161 anchor service."
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "provelog==1.2.16",
+]
+
+[project.urls]
+Homepage = "https://provelog.ai"
+Source = "https://github.com/provelog/provelog"
+
+[tool.setuptools]
+packages = ["provelog.server"]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+"provelog.server" = ["*.html", "*.css", "*.js"]

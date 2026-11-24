@@ -117,6 +117,48 @@ def _has_new_records(store: Any, session_id: str, boundary: int) -> bool:
     return any(_iso_ms(event.get("ts_utc")) > boundary for event in events)
 
 
+                                                                              
+                                                                              
+                                                                            
+                                           
+_RESTORE_FIELDS = (
+    "host_seq", "assignment_seq", "source_path", "source_mtime", "source_size",
+    "chain_id", "capture_from_ms", "head_omitted", "capture_point",
+    "verification_level", "commit_at", "commit_count", "source_offsets",
+    "last_turn", "last_ms", "legacy_multi",
+)
+
+
+def _bare_id(value: Any) -> str:
+    text = str(value or "")
+    return text[5:] if text.startswith("id-") else text
+
+
+def _restored_capture(store: Any, session_id: str, folder: Any) -> dict[str, Any]:
+    """Read the watermark stored in a returned folder's manifest.
+
+    A restored folder is evidence; its manifest records the last host position
+    that folder actually captured. Do not derive this from the chain's record
+    seq: importers use host sequence numbers, not evidence sequence numbers.
+    """
+    try:
+        manifest = json.loads((Path(folder) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(manifest, dict):
+        return {}
+    source: Any = manifest
+    if str(manifest.get("session_id") or "") not in {session_id, _bare_id(session_id)}:
+        child = (manifest.get("child_sessions") or {}).get(session_id)
+        if child is None:
+            for key, value in (manifest.get("child_sessions") or {}).items():
+                if _bare_id(key) == _bare_id(session_id):
+                    child = value
+                    break
+        source = child if isinstance(child, dict) else {}
+    return {key: source[key] for key in _RESTORE_FIELDS if key in source}
+
+
 def reconcile_missing(store: Any, at_ms: int | None = None,
                       now: float | None = None) -> bool:
     """Reconcile state rows with the evidence folders they describe.
@@ -211,6 +253,9 @@ def reconcile_missing(store: Any, at_ms: int | None = None,
                 and entry.get("deleted_at_ms")):
             boundary = int(entry.get("deleted_at_ms") or 0)
             if not _has_new_records(store, session_id, boundary):
+                restored = _restored_capture(store, session_id, folder)
+                if restored:
+                    entry.update(restored)
                 entry.pop("deleted_at_ms", None)
                 entry.pop("deleted_by", None)
                 changed += 1

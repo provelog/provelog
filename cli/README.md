@@ -104,16 +104,9 @@ turns a missing timestamp into a green claim.
 
 ## Internal / operator
 
-The timestamp relay is part of the product infrastructure, not a user-facing
-self-host feature:
-
-```bash
-python -m provelog.server --host 127.0.0.1 --port 8080 --db provelog.db
-```
-
-It aggregates claims into RFC 3161 epochs (Sectigo primary, FreeTSA fallback)
-and never receives record content. Operator runbooks are internal and ship with
-the relay deployment, not the public package.
+The timestamp relay is operator-only and is **not part of this package**.
+`pip install provelog` never installs or runs it. The relay is built locally
+from the AGPL source by the operator and is not published on PyPI.
 
 ## Documentation
 
@@ -125,13 +118,9 @@ Contact: <contact@provelog.ai>.
 
 ## License
 
-Open-core, dual-licensed:
+The client, verifier, bundle format, specification and web verifier are MIT.
 
-- **MIT** for the client, verifier, bundle format, specification and web
-  verifier (`LICENSE`);
-- **AGPL-3.0-or-later** for the relay (`src/provelog/server/`), see
-  `LICENSE-AGPL`.
-
-The recorder is derived from the recording half of
+The separately built operator relay is AGPL-3.0-or-later; it is not included in
+this package. The recorder is derived from the recording half of
 [pofky/provenrail](https://github.com/pofky/provenrail); upstream's MIT/AGPL
 split and attribution are retained.
